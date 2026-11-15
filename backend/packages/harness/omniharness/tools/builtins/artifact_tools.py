@@ -64,9 +64,17 @@ def _context(runtime: ToolRuntime[ContextT, ThreadState] | None, *, with_turn: b
         "at most 50 files, 2 MB). The entry's DEFAULT EXPORT is the component the system mounts. Only react and "
         "react-dom can be imported (plus the project's own files by relative path; write plain CSS); no "
         "dangerouslySetInnerHTML. The system builds it in this chat's sandbox.\n"
-        "Both get the system checks (layout at 360, 560 and 1280 px in light and dark, no network, it renders). The "
-        'frame sets class "dark" on <html> and CSS variables (--background, --foreground, --card, --muted, '
-        "--muted-foreground, --primary, --primary-foreground, --border, --accent, --destructive, --ring): use them."
+        "Both get the system checks (layout at 360, 560 and 1280 px in light and dark, no network, it renders, "
+        'readable charts). The frame sets class "dark" on <html> and CSS variables (--background, --foreground, '
+        "--card, --muted, --muted-foreground, --primary, --primary-foreground, --border, --accent, --destructive, "
+        "--ring): use them.\n"
+        "Charts (inline SVG or HTML): bars, lines, points and slices need 3:1 contrast with the surface behind them in "
+        "light AND dark: colour them var(--primary), var(--foreground), var(--destructive), var(--muted-foreground) "
+        "or currentColor (or your own palette set for both html and html.dark), never one fixed colour for both "
+        "themes, never --accent, --muted or --border (surfaces). Labels must not overlap or be cut off at 360 px: size the svg in px to its "
+        "box (text at least 11 px), wrap a long label onto two <tspan> lines, rotate, abbreviate or show every 2nd or "
+        "3rd label; keep every label inside the svg. Give each chart a <title>/aria-label or a table. The checks "
+        "fail overlapping or cut-off labels and faint marks."
     ),
 )
 def artifact_create_tool(

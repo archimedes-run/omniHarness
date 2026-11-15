@@ -113,3 +113,44 @@ def test_live_a_process_started_before_the_check_survives_it():
     _, state = ops.sh(f"grep '^State:' /proc/{pid}/status", timeout=10)
     ops.sh(f"kill {pid}", timeout=10)
     assert state.split()[1:2] and state.split()[1] in ("S", "R"), f"the check stopped a process it did not start: {state!r}"
+
+
+# -- readable charts (layout_probe.CHART_MEASURE) ----------------------------------------
+# chart_pages.py: GOOD charts (and the Apps kit's own chart parts) must pass,
+# each BAD chart must fail in the words it names, ORDINARY pages with no
+# chart must pass. A check that fires on the pages it should leave alone is
+# a regression whatever it catches.
+
+import chart_pages  # noqa: E402
+
+
+@pytest.mark.parametrize("name", [*chart_pages.GOOD, "apps kit parts"])
+def test_live_good_charts_pass(name):
+    html = chart_pages.kit_page() if name == "apps kit parts" else chart_pages.GOOD[name]
+    result, _ = checks.run(DockerOps(), html.encode())
+    assert result["outcome"] == "pass", (name, result["summary"], result["failures"])
+
+
+@pytest.mark.parametrize("name", list(chart_pages.BAD))
+def test_live_bad_charts_fail_with_the_right_words(name):
+    html, words = chart_pages.BAD[name]
+    result, _ = checks.run(DockerOps(), html.encode())
+    assert result["outcome"] == "fail", (name, result)
+    for want in words:
+        assert any(want in s for s in result["summary"]), (name, want, result["summary"])
+
+
+@pytest.mark.parametrize("name", list(chart_pages.ORDINARY))
+def test_live_ordinary_pages_pass(name):
+    result, _ = checks.run(DockerOps(), chart_pages.ORDINARY[name].encode())
+    assert result["outcome"] == "pass", (name, result["summary"], result["failures"])
+
+
+def test_live_budget_tracker_pattern_fails_at_360_and_560_and_in_dark():
+    """The pattern seen live: dark bars on the dark card, x labels in one
+    string at the side panel's ~520 px (the probe measures 360 and 560)."""
+    html, _ = chart_pages.BAD["budget tracker: dark bars on the dark card, fixed-position nowrap labels"]
+    result, _ = checks.run(DockerOps(), html.encode())
+    summary = " | ".join(result["summary"])
+    assert "chart labels overlap at 360 px" in summary and "chart labels overlap at 560 px" in summary, summary
+    assert "chart bars have too little contrast with the background in dark" in summary and "in light (worst" not in summary, summary

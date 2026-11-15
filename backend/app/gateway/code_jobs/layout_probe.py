@@ -13,7 +13,10 @@ gateway wrote to check.json. It is loaded once per theme (the frame shim
 reads the theme from the URL fragment) and measured at each width; the
 check records every blocked request (CSP violations from an isolated world,
 the browser's own reports, and any request to anything but the local
-server) and saves a PNG per theme at the widest width.
+server) and saves a PNG per theme at the widest width. At each width it
+also measures the page's charts (CHART_MEASURE: overlapping or cut-off
+labels, marks too faint against what is behind them); the other modes do
+not run it.
 
 With `app` (Spec 011 FR-026) the site is an app's MOCK build: its index.html
 reads `?state=` and `?theme=` and answers every source in that state. It is
@@ -358,14 +361,11 @@ RTC_WATCH = r"""
 })()
 """
 
-#: Runs in the page, in the isolated world, after MEASURE: contrast, small
-#: text, small touch targets, nested frames, and the tile words. Returns
-#: numbers, booleans and short filtered strings only.
-APP_MEASURE = r"""
-(function (cfg) {
-  const de = document.documentElement;
-  const body = document.body;
-  const safe = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+#: Page helpers shared by the app check and the artifact chart check: element
+#: names, any CSS colour to sRGB, contrast ratios, the background under an
+#: element (needs `cfg.theme` in scope) and visibility. Spliced into both
+#: unchanged, so the app check runs the same code it always did.
+PAGE_HELPERS = r"""  const safe = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
   const name = (el) => {
     let s = el.tagName.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 20);
     if (el.id) s += '#' + safe(el.id);
@@ -431,7 +431,19 @@ APP_MEASURE = r"""
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  const low = new Map();
+"""
+
+#: Runs in the page, in the isolated world, after MEASURE: contrast, small
+#: text, small touch targets, nested frames, and the tile words. Returns
+#: numbers, booleans and short filtered strings only.
+APP_MEASURE = (
+    r"""
+(function (cfg) {
+  const de = document.documentElement;
+  const body = document.body;
+"""
+    + PAGE_HELPERS
+    + r"""  const low = new Map();
   const small = new Map();
   let measured = 0;
   let lowCount = 0;
@@ -660,6 +672,321 @@ APP_MEASURE = r"""
   };
 })
 """
+)
+
+
+#: Artifact mode only (Spec 012): are the page's charts readable? Runs in the
+#: isolated world after MEASURE, with the shared page helpers. Three rules:
+#: * overlap: text boxes inside one <svg> (rotated boxes compared as drawn,
+#:   the line spacing above and below the glyphs left out), and the text of
+#:   neighbouring items in a row of short labels, must not overlap by more
+#:   than 1.5 px;
+#: * cut off: text in an <svg> must stay inside the svg's own box and every
+#:   box that hides overflow around it; text in a row of short labels inside
+#:   the row and its items (2 px allowed; CSS ellipsis and line clamps are
+#:   truncation by design and allowed; text hidden whole, as in a collapsed
+#:   panel or a screen-reader-only label, is not measured);
+#: * mark contrast: in a chart-like <svg> (3+ marks and 3+ labels, a series of
+#:   3+ equal-width or equal-height bars, a pie or a donut, with a label or a
+#:   text alternative, or
+#:   a name/label saying chart, graph,
+#:   plot or spark), each solid mark (bar, point, slice, a line 1.5 px or
+#:   thicker) against what is drawn behind it must reach 3:1. Not marks: thin
+#:   and dashed lines (grid, axes, ticks), fills under 50% opacity (tints),
+#:   a shape covering half the chart or holding 2+ marks (its background; it
+#:   is composited under the marks instead), a stroked ring or box around a
+#:   mark (a track). Gradients, patterns and images behind are not measured
+#:   and counted as such.
+#: Returns numbers and short, filtered strings only.
+CHART_MEASURE = (
+    r"""
+(function (cfg) {
+  try {
+"""
+    + PAGE_HELPERS
+    + r"""  const out = { seen: 0, overlap: [], row_overlap: [], clipped: [], contrast: [], unmeasured: 0 };
+  const TOL = 1.5;
+  const CUT = 2;
+  const words = (s) => String(s || '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24);
+  const quad = (el, inset) => {
+    let bb;
+    try { bb = el.getBBox(); } catch (e) { return null; }
+    if (!bb || (bb.width <= 0 && bb.height <= 0)) return null;
+    const m = el.getScreenCTM();
+    if (!m) return null;
+    const iy = bb.height * (inset || 0);
+    return [[bb.x, bb.y + iy], [bb.x + bb.width, bb.y + iy], [bb.x + bb.width, bb.y + bb.height - iy], [bb.x, bb.y + bb.height - iy]].map(([x, y]) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]);
+  };
+  const rectQuad = (r, inset) => {
+    const iy = r.height * (inset || 0);
+    return [[r.left, r.top + iy], [r.right, r.top + iy], [r.right, r.bottom - iy], [r.left, r.bottom - iy]];
+  };
+  const boxOf = (q) => {
+    const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+    return { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
+  };
+  // How deep two convex quads overlap (separating axes); 0 when apart.
+  const depth = (p, q) => {
+    let best = Infinity;
+    for (const poly of [p, q]) {
+      for (let i = 0; i < 4; i++) {
+        const a = poly[i], b = poly[(i + 1) % 4];
+        let nx = b[1] - a[1], ny = a[0] - b[0];
+        const len = Math.hypot(nx, ny);
+        if (!len) continue;
+        nx /= len; ny /= len;
+        let p0 = Infinity, p1 = -Infinity, q0 = Infinity, q1 = -Infinity;
+        for (const v of p) { const d = v[0] * nx + v[1] * ny; p0 = Math.min(p0, d); p1 = Math.max(p1, d); }
+        for (const v of q) { const d = v[0] * nx + v[1] * ny; q0 = Math.min(q0, d); q1 = Math.max(q1, d); }
+        const o = Math.min(p1, q1) - Math.max(p0, q0);
+        if (o <= 0) return 0;
+        best = Math.min(best, o);
+      }
+    }
+    return best === Infinity ? 0 : best;
+  };
+  // The visible region around `el`: every box hiding overflow from `el`
+  // (an outer <svg> counts itself) up to `stop` (exclusive; to the page when
+  // null). `allowX/Y`: an ellipsis or line clamp there truncates by design.
+  // null when something clips it on purpose (clip-path, a tiny box).
+  const region = (el, stop) => {
+    const r = { left: -Infinity, right: Infinity, top: -Infinity, bottom: Infinity, allowX: false, allowY: false };
+    for (let n = el; n && n !== stop && n.nodeType === 1; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if ((cs.clipPath && cs.clipPath !== 'none') || (cs.clip && cs.clip !== 'auto')) return null;
+      const isSvg = n instanceof SVGSVGElement;
+      if (n instanceof SVGElement && (!isSvg || n.ownerSVGElement)) continue;
+      if (n === el && !isSvg) {
+        if (cs.textOverflow === 'ellipsis') r.allowX = true;
+        if (cs.webkitLineClamp && cs.webkitLineClamp !== 'none') r.allowY = true;
+      }
+      const hx = cs.overflowX === 'hidden' || cs.overflowX === 'clip';
+      const hy = cs.overflowY === 'hidden' || cs.overflowY === 'clip';
+      if (!hx && !hy) continue;
+      const b = n.getBoundingClientRect();
+      const px = (v) => parseFloat(v) || 0;
+      const left = b.left + px(cs.borderLeftWidth), top = b.top + px(cs.borderTopWidth);
+      const w = isSvg ? b.width - px(cs.borderLeftWidth) - px(cs.borderRightWidth) : n.clientWidth;
+      const h = isSvg ? b.height - px(cs.borderTopWidth) - px(cs.borderBottomWidth) : n.clientHeight;
+      if (w <= 2 || h <= 2) return null;
+      if (hx) { r.left = Math.max(r.left, left); r.right = Math.min(r.right, left + w); if (cs.textOverflow === 'ellipsis') r.allowX = true; }
+      if (hy) { r.top = Math.max(r.top, top); r.bottom = Math.min(r.bottom, top + h); if (cs.webkitLineClamp && cs.webkitLineClamp !== 'none') r.allowY = true; }
+    }
+    return r;
+  };
+  // How far a box sticks out of a region: 0 inside, -1 when hidden whole.
+  const cutBy = (b, r) => {
+    if (b.right <= r.left || b.left >= r.right || b.bottom <= r.top || b.top >= r.bottom) return -1;
+    let worst = 0;
+    if (!r.allowX) worst = Math.max(worst, r.left - b.left, b.right - r.right);
+    if (!r.allowY) worst = Math.max(worst, r.top - b.top, b.bottom - r.bottom);
+    return worst;
+  };
+  const SKIP = 'defs,clipPath,mask,pattern,marker,symbol';
+  const NAMED = /chart|graph|plot|spark/i;
+  const named = (svg) => {
+    for (let n = svg, i = 0; n && n.getAttribute && i < 3; n = n.parentElement, i++) {
+      const cls = typeof n.className === 'string' ? n.className : (n.className && n.className.baseVal) || '';
+      if (NAMED.test([n.getAttribute('aria-label'), n.getAttribute('aria-roledescription'), n.id, cls].join(' '))) return true;
+    }
+    const t = svg.querySelector(':scope > title');
+    return !!(t && NAMED.test(t.textContent || ''));
+  };
+  const svgs = Array.from(document.querySelectorAll('svg')).filter((s) => !s.ownerSVGElement).slice(0, 60);
+  for (const svg of svgs) {
+    const sr = svg.getBoundingClientRect();
+    if (sr.width < 24 || sr.height < 16 || !visible(svg)) continue;
+    const around = region(svg.parentElement, null);
+    if (!around || cutBy({ left: sr.left, right: sr.right, top: sr.top, bottom: sr.bottom }, around) < 0) continue; // hidden on purpose
+    const label = where(svg);
+    // Labels.
+    const texts = [];
+    const tl = svg.querySelectorAll('text');
+    for (let i = 0; i < tl.length && i < 300; i++) {
+      const t = tl[i];
+      if (t.closest(SKIP) || t.closest('[clip-path],[mask]') || t.parentElement.closest('text')) continue;
+      const shown = words(t.textContent);
+      if (!shown || !visible(t)) continue;
+      const q = quad(t, 0.18);
+      if (q) texts.push({ el: t, q, b: boxOf(q), shown });
+    }
+    let overlapped = null;
+    for (let a = 0; a < texts.length && !overlapped; a++) {
+      for (let b = a + 1; b < texts.length; b++) {
+        const p = texts[a], q = texts[b];
+        if (p.shown === q.shown && Math.abs(p.b.left - q.b.left) < 2 && Math.abs(p.b.top - q.b.top) < 2) continue; // a halo drawn under its own label
+        if (depth(p.q, q.q) > TOL) { overlapped = { where: label, labels: [p.shown, q.shown] }; break; }
+      }
+    }
+    if (overlapped && out.overlap.length < 3) out.overlap.push(overlapped);
+    let cut = null;
+    const box = region(svg, null);
+    for (const t of box ? texts : []) {
+      const by = cutBy(t.b, box);
+      if (by > CUT || by < 0) { cut = { where: label, labels: [t.shown], px: by < 0 ? -1 : Math.round(by) }; break; }
+    }
+    if (cut && out.clipped.length < 3) out.clipped.push(cut);
+    // Marks.
+    const svgArea = sr.width * sr.height;
+    const items = [];
+    const shapes = svg.querySelectorAll('rect,circle,ellipse,path,polygon,polyline,line');
+    for (let i = 0; i < shapes.length && i < 3000; i++) {
+      const el = shapes[i];
+      if (el.closest(SKIP) || !visible(el)) continue;
+      const es = getComputedStyle(el);
+      let op = 1;
+      for (let n = el; n && n !== svg.parentElement; n = n.parentElement) { const o = parseFloat(getComputedStyle(n).opacity); if (!isNaN(o)) op *= o; }
+      const q = quad(el, 0);
+      if (!q) continue;
+      const b = boxOf(q);
+      const w = b.right - b.left, h = b.bottom - b.top;
+      const tag = el.tagName.toLowerCase();
+      const m = el.getScreenCTM();
+      const scale = m ? Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) : 1;
+      const fillUrl = /url\(/.test(es.fill || '');
+      const strokeUrl = /url\(/.test(es.stroke || '');
+      const fc = tag === 'line' || fillUrl || es.fill === 'none' ? null : rgba(es.fill);
+      const fa = fc ? fc[3] * (parseFloat(es.fillOpacity) || 0) * op : 0;
+      const sw = (parseFloat(es.strokeWidth) || 0) * scale;
+      const closed = tag === 'circle' || tag === 'ellipse' || tag === 'rect';
+      const ring = tag === 'circle' || tag === 'ellipse';
+      const dashed = !!es.strokeDasharray && es.strokeDasharray !== 'none';
+      const sc = strokeUrl || es.stroke === 'none' ? null : rgba(es.stroke);
+      const sa = sc ? sc[3] * (parseFloat(es.strokeOpacity) || 0) * op : 0;
+      const item = { b, area: w * h, cx: (b.left + b.right) / 2, cy: (b.top + b.bottom) / 2, i: items.length };
+      if (fa > 0) {
+        Object.assign(item, { filled: true, colour: fc, alpha: fa, kind: tag === 'rect' ? 'bars' : ring ? 'points' : 'slices' });
+        if (item.area >= 0.5 * svgArea) item.background = true;
+        else if (fa < 0.5 || item.area < 16 || Math.min(w, h) < 2) item.tint = true;
+      } else if (fillUrl && item.area >= 16) {
+        item.unmeasured = true;
+      } else if (sa > 0 && (!dashed || ring) && sw >= (tag === 'line' ? 3 : 1.5)) {
+        Object.assign(item, { filled: false, colour: sc, alpha: sa, kind: ring && dashed ? 'slices' : 'lines', closed, dashed });
+        if (sa < 0.5) item.tint = true;
+      } else if (strokeUrl && sw >= 1.5) {
+        item.unmeasured = true;
+      } else continue;
+      items.push(item);
+    }
+    const marks = items.filter((it) => it.colour && !it.background && !it.tint);
+    const within = (big, it) => it.b.left >= big.b.left - 1 && it.b.right <= big.b.right + 1 && it.b.top >= big.b.top - 1 && it.b.bottom <= big.b.bottom + 1;
+    const holds = (big, it) => it.cx >= big.b.left - 1 && it.cx <= big.b.right + 1 && it.cy >= big.b.top - 1 && it.cy <= big.b.bottom + 1 && big.area >= 2 * it.area;
+    for (const it of marks) {
+      const held = marks.filter((o) => o.i > it.i && holds(it, o)).length;
+      if (it.filled && held >= 2) it.background = true;
+      else if (!it.filled && it.closed && !it.dashed && marks.some((o) => o.i > it.i && within(it, o))) it.track = true;
+    }
+    const real = marks.filter((it) => !it.background && !it.track);
+    const series = (side) => {
+      const counts = new Map();
+      for (const it of real) {
+        if (it.kind !== 'bars') continue;
+        const k = Math.round((side === 'w' ? it.b.right - it.b.left : it.b.bottom - it.b.top) * 2);
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
+      return Math.max(0, ...counts.values()) >= 3;
+    };
+    // A bar series counts when it has a label or a text alternative (rows of
+    // placeholder bars in a loading skeleton have neither).
+    const described = texts.length >= 1 || svg.getAttribute('role') === 'img' || svg.hasAttribute('aria-label') || !!svg.querySelector(':scope > title');
+    // A pie: 3+ filled slices in 3+ colours meeting at one point (a one- or
+    // two-colour mark of petals is a logo); a donut: 2+ dashed arcs.
+    const slices = real.filter((it) => it.kind === 'slices' && it.filled);
+    const mid = slices.length ? [(Math.min(...slices.map((it) => it.b.left)) + Math.max(...slices.map((it) => it.b.right))) / 2, (Math.min(...slices.map((it) => it.b.top)) + Math.max(...slices.map((it) => it.b.bottom))) / 2] : null;
+    const pie = new Set(slices.map((it) => it.colour.join(','))).size >= 3 && slices.every((it) => mid[0] >= it.b.left - 1 && mid[0] <= it.b.right + 1 && mid[1] >= it.b.top - 1 && mid[1] <= it.b.bottom + 1);
+    const arcs = real.filter((it) => it.kind === 'slices' && !it.filled).length >= 2;
+    const chartLike = (real.length >= 3 && texts.length >= 3) || ((series('w') || series('h') || pie || arcs) && described) || (real.length >= 1 && named(svg));
+    if (texts.length >= 2 || chartLike) out.seen++;
+    if (!chartLike) continue;
+    const base = backdrop(svg);
+    let worst = null;
+    let unmeasured = items.filter((it) => it.unmeasured).length;
+    for (const it of real) {
+      if (!base) { unmeasured++; continue; }
+      const layers = [];
+      let blocked = false;
+      for (let j = it.i - 1; j >= 0; j--) {
+        const under = items[j];
+        if (!(under.filled || under.unmeasured) || !holds(under, it)) continue;
+        if (under.unmeasured) { blocked = true; break; }
+        if (ratio(under.colour, it.colour) < 1.05 && Math.abs(under.alpha - it.alpha) < 0.01) continue; // its own series
+        layers.push(under);
+        if (under.alpha >= 0.999) break;
+      }
+      if (blocked) { unmeasured++; continue; }
+      let bg = base.bg;
+      for (let k = layers.length - 1; k >= 0; k--) bg = over([layers[k].colour[0], layers[k].colour[1], layers[k].colour[2], layers[k].alpha * base.opacity], bg);
+      const shown = over([it.colour[0], it.colour[1], it.colour[2], it.alpha * base.opacity], bg);
+      const r = ratio(shown, bg);
+      if (r + 0.005 < 3 && (!worst || r < worst.ratio)) worst = { where: label, kind: it.kind, ratio: Math.round(r * 100) / 100 };
+    }
+    out.unmeasured += unmeasured;
+    if (worst && out.contrast.length < 3) out.contrast.push(worst);
+  }
+  // Rows of short labels (an HTML bar chart's axis, a legend): the text of
+  // neighbouring items must not overlap, nor be cut by the row or its items.
+  const all = document.body ? document.body.getElementsByTagName('*') : [];
+  let rows = 0;
+  const textRects = (item) => {
+    const found = [];
+    const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(), k = 0; n && k < 20; n = walker.nextNode(), k++) {
+      if (!n.nodeValue || !n.nodeValue.trim() || !n.parentElement || n.parentElement.closest('svg') || !visible(n.parentElement)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(n);
+      for (const r of Array.from(range.getClientRects()).slice(0, 4)) if (r.width > 0 && r.height > 0) found.push({ r, el: n.parentElement, shown: words(n.nodeValue) });
+    }
+    return found;
+  };
+  for (let i = 0; i < all.length && i < 4000 && rows < 40; i++) {
+    const row = all[i];
+    if (row instanceof SVGElement || row.children.length < 3 || row.children.length > 60) continue;
+    const kids = Array.from(row.children).filter((c) => !(c instanceof SVGElement) && visible(c));
+    if (kids.length < 3) continue;
+    const boxes = kids.map((c) => c.getBoundingClientRect());
+    let inRow = true;
+    for (let k = 1; k < boxes.length && inRow; k++) {
+      inRow = boxes[k].left > boxes[k - 1].left + 1 && Math.min(boxes[k].bottom, boxes[k - 1].bottom) - Math.max(boxes[k].top, boxes[k - 1].top) > 0;
+    }
+    if (!inRow) continue;
+    const labels = kids.map((c) => (c.textContent || '').trim());
+    if (labels.filter((t) => t.length > 0 && t.length <= 40).length < Math.max(3, Math.ceil(0.75 * kids.length)) || labels.some((t) => t.length > 80)) continue;
+    rows++;
+    // Each label's text as shown: what the row and its items let through.
+    const per = kids.map((kid) => textRects(kid).map((p) => {
+      const r = region(p.el, row.parentElement);
+      const core = { left: p.r.left, right: p.r.right, top: p.r.top + 0.15 * p.r.height, bottom: p.r.bottom - 0.15 * p.r.height };
+      if (!r) return null;
+      const shown = { left: Math.max(core.left, r.left), right: Math.min(core.right, r.right), top: Math.max(core.top, r.top), bottom: Math.min(core.bottom, r.bottom) };
+      return { ...p, by: cutBy(core, r), quad: shown.right > shown.left && shown.bottom > shown.top ? rectQuad({ left: shown.left, right: shown.right, top: shown.top, bottom: shown.bottom, height: shown.bottom - shown.top }, 0) : null };
+    }).filter(Boolean));
+    let hit = null;
+    for (let a = 0; a < per.length && !hit; a++) {
+      for (let b = a + 1; b < per.length && b <= a + 2 && !hit; b++) {
+        for (const p of per[a]) {
+          for (const q of per[b]) {
+            if (p.quad && q.quad && depth(p.quad, q.quad) > TOL) { hit = { where: where(row), labels: [p.shown, q.shown] }; break; }
+          }
+          if (hit) break;
+        }
+      }
+    }
+    if (hit && out.row_overlap.length < 3) out.row_overlap.push(hit);
+    let cut = null;
+    for (let a = 0; a < per.length && !cut; a++) {
+      for (const p of per[a]) {
+        if (p.by > CUT) { cut = { where: where(row), labels: [p.shown], px: Math.round(p.by) }; break; }
+      }
+    }
+    if (cut && out.clipped.length < 3) out.clipped.push(cut);
+  }
+  return out;
+  } catch (e) {
+    return { failed: true };
+  }
+})
+"""
+)
 
 
 def clip(value, n):
@@ -1134,6 +1461,7 @@ class Check:
         session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
         run["_loaded"] = threading.Event()
         self.pages[session] = run
+        expression = "(function () { const base = " + MEASURE.strip() + "; base.charts = " + CHART_MEASURE.strip() + "(" + json.dumps({"theme": theme}) + "); return base; })()"
         try:
             cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, session)
             cdp.call("Page.enable", None, session)
@@ -1165,7 +1493,7 @@ class Check:
                 if i:
                     cdp.call("Emulation.setDeviceMetricsOverride", {"width": width, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": False}, session)
                     time.sleep(RESIZE_S)
-                value = self._evaluate(MEASURE, world, session)
+                value = self._evaluate(expression, world, session)
                 if not isinstance(value, dict):
                     run["load_error"] = "unmeasurable"
                     return run
