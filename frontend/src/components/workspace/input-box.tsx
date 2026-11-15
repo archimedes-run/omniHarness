@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAgent } from "@/core/agents/hooks";
 import { useI18n } from "@/core/i18n/hooks";
+import { shouldCollapsePaste, wrapPastes } from "@/core/messages/pasted-text";
 import { useModels } from "@/core/models/hooks";
 import { usePreferences } from "@/core/preferences/hooks";
 import type { AgentThreadContext } from "@/core/threads";
@@ -93,6 +94,7 @@ import {
 import { useFollowups } from "./chat-bar/use-followups";
 import { WelcomeSuggestions } from "./chat-bar/welcome-suggestions";
 import { useThread } from "./messages/context";
+import { PastedTextCard } from "./pasted-text";
 import { Tooltip } from "./tooltip";
 
 type BarContext = Omit<
@@ -183,6 +185,30 @@ export function InputBox({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(
     null,
+  );
+
+  // Long pastes are held as cards above the text instead of filling the box.
+  const [pastes, setPastes] = useState<{ id: number; text: string }[]>([]);
+  const pasteSeq = useRef(0);
+  const onPasteCapture = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const data = event.clipboardData;
+      if (
+        !data ||
+        Array.from(data.items ?? []).some((i) => i.kind === "file")
+      ) {
+        return;
+      }
+      const pasted = data.getData("text/plain");
+      if (!pasted || !shouldCollapsePaste(pasted)) {
+        return;
+      }
+      event.preventDefault();
+      pasteSeq.current += 1;
+      const id = pasteSeq.current;
+      setPastes((current) => [...current, { id, text: pasted }]);
+    },
+    [],
   );
 
   const text = textInput.value ?? "";
@@ -543,13 +569,23 @@ export function InputBox({
         onStop?.();
         return;
       }
-      if (!message.text) {
+      if (!message.text && pastes.length === 0) {
         return;
       }
       resetFollowups();
       setTrigger(null);
       setPickerOpen(false);
-      const outgoing = message;
+      const outgoing =
+        pastes.length > 0
+          ? {
+              ...message,
+              text: wrapPastes(
+                message.text,
+                pastes.map((p) => p.text),
+              ),
+            }
+          : message;
+      setPastes([]);
 
       // Guard against submitting before the initial model auto-selection
       // effect has flushed thread settings to storage/state.
@@ -572,6 +608,7 @@ export function InputBox({
       onContextChange,
       onSubmit,
       onStop,
+      pastes,
       resetFollowups,
       resolvedModelName,
       selectedModel?.supports_thinking,
@@ -796,8 +833,25 @@ export function InputBox({
               disabled={disabled}
             />
           </PromptInputHeader>
+          {pastes.length > 0 && (
+            <div
+              data-testid="pasted-text-row"
+              className="flex w-full gap-2 overflow-x-auto px-0.5 pt-2 pb-1"
+            >
+              {pastes.map((p) => (
+                <PastedTextCard
+                  key={p.id}
+                  text={p.text}
+                  onRemove={() =>
+                    setPastes((current) => current.filter((c) => c.id !== p.id))
+                  }
+                />
+              ))}
+            </div>
+          )}
           <PromptInputTextarea
             ref={textareaRef}
+            onPasteCapture={onPasteCapture}
             // 16 px, two rows to start, growing to ten (24 px a row).
             className="max-h-[248px] min-h-14 overflow-y-auto px-0.5 py-1 text-base leading-6 md:text-base"
             disabled={disabled}
