@@ -280,10 +280,15 @@ async def run_agent(
             config.setdefault("callbacks", []).append(journal)
 
         runnable_config = RunnableConfig(**config)
+        # Off the event loop: building the agent assembles its tools, and a
+        # connector toolkit starts a process and lists its tools over it. On
+        # the loop, every request the gateway serves waited for that.
+        from omniharness.utils.off_loop import call_off_loop
+
         if ctx.app_config is not None and _agent_factory_supports_app_config(agent_factory):
-            agent = agent_factory(config=runnable_config, app_config=ctx.app_config)
+            agent = await call_off_loop(agent_factory, config=runnable_config, app_config=ctx.app_config)
         else:
-            agent = agent_factory(config=runnable_config)
+            agent = await call_off_loop(agent_factory, config=runnable_config)
 
         # 4. Attach checkpointer and store
         if checkpointer is not None:

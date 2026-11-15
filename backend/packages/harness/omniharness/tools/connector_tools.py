@@ -55,6 +55,23 @@ def _api_key() -> str:
     return os.environ.get("COMPOSIO_API_KEY", "")
 
 
+#: How long one toolkit may take to start its server and list its tools before
+#: it is skipped for this assembly. Toolkits load concurrently, so this bounds
+#: the whole load, not each one in turn. Overridden by the environment.
+TOOLKIT_LOAD_TIMEOUT_ENV = "CONNECTOR_TOOLKIT_LOAD_TIMEOUT_SECONDS"
+DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS = 15.0
+
+
+def _toolkit_load_timeout() -> float:
+    raw = os.environ.get(TOOLKIT_LOAD_TIMEOUT_ENV, "")
+    try:
+        value = float(raw) if raw.strip() else DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS
+    except ValueError:
+        logger.warning("%s=%r is not a number; using %ss", TOOLKIT_LOAD_TIMEOUT_ENV, raw, DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS)
+        return DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS
+    return value if value > 0 else DEFAULT_TOOLKIT_LOAD_TIMEOUT_SECONDS
+
+
 async def _active_accounts_for_user(user_id: str, toolkits: set[str]) -> dict[str, str]:
     """Return ``{TOOLKIT: connected_account_id}`` for the user's ACTIVE connections.
 
@@ -123,20 +140,36 @@ async def _load_connector_tools_async(user_id: str, toolkits: set[str]) -> list[
     from omniharness.mcp.tools import _make_sync_tool_wrapper
     from omniharness.tools.source_tags import tag_source
 
-    tools: list[BaseTool] = []
-    for toolkit, account_id in accounts.items():
+    timeout = _toolkit_load_timeout()
+
+    async def load_one(toolkit: str, account_id: str) -> list[BaseTool]:
         spec = _build_stdio_spec(toolkit, account_id, user_id, api_key)
+        client = MultiServerMCPClient({_server_name(toolkit): spec}, tool_name_prefix=True)
+        server_tools = await client.get_tools()
+        for tool in server_tools:
+            if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
+                tool.func = _make_sync_tool_wrapper(tool.coroutine, tool.name)
+            tag_source(tool, f"connector:{toolkit}", user_id)
+        logger.info("Loaded %d connector tool(s) for user=%s toolkit=%s", len(server_tools), user_id, toolkit)
+        return server_tools
+
+    async def bounded(toolkit: str, account_id: str) -> list[BaseTool]:
+        # A toolkit that hangs is cancelled at the limit; cancelling leaves the
+        # client's session context, which stops the server process it started.
         try:
-            client = MultiServerMCPClient({_server_name(toolkit): spec}, tool_name_prefix=True)
-            server_tools = await client.get_tools()
-            for tool in server_tools:
-                if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
-                    tool.func = _make_sync_tool_wrapper(tool.coroutine, tool.name)
-                tag_source(tool, f"connector:{toolkit}", user_id)
-            tools.extend(server_tools)
-            logger.info("Loaded %d connector tool(s) for user=%s toolkit=%s", len(server_tools), user_id, toolkit)
+            return await asyncio.wait_for(load_one(toolkit, account_id), timeout=timeout)
+        except TimeoutError:
+            logger.warning("Skipping connector toolkit %s for user %s: timed out after %gs", toolkit, user_id, timeout)
         except Exception as exc:
             logger.warning("Skipping connector toolkit %s for user %s: %s", toolkit, user_id, exc)
+        return []
+
+    # All toolkits at once (one slow toolkit no longer delays the rest), the
+    # results joined in the same order as before.
+    results = await asyncio.gather(*(bounded(toolkit, account_id) for toolkit, account_id in accounts.items()))
+    tools: list[BaseTool] = []
+    for server_tools in results:
+        tools.extend(server_tools)
     return tools
 
 

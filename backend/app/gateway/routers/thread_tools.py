@@ -201,6 +201,7 @@ async def get_thread_tools_count(thread_id: str, request: Request) -> CountRespo
     from app.gateway.tool_selection import thread_sources
     from omniharness.config import get_app_config
     from omniharness.tools.tools import ToolCapExceededError, get_available_tools, offered_tool_count, resolve_model_tool_cap
+    from omniharness.utils.off_loop import call_off_loop
 
     user_id = _get_user_id(request)
     get_thread_tool_selection_repo(request)
@@ -214,9 +215,10 @@ async def get_thread_tools_count(thread_id: str, request: Request) -> CountRespo
     # the cap are deferred to tool_search (tools.fit_connectors_to_cap), so the
     # count is what the model receives. Over the cap only when the tools that
     # cannot be deferred exceed it — the UI shows "N / cap" and blocks
-    # enabling more.
+    # enabling more. Off the event loop: connector toolkits start a process
+    # each, and the whole gateway waited while they listed their tools.
     try:
-        tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap, artifact_tools=True)
+        tools = await call_off_loop(get_available_tools, selected_sources=sources, user_id=user_id, app_config=app_config, max_tools=cap, artifact_tools=True)
         count = offered_tool_count(tools)
     except ToolCapExceededError as exc:
         count = exc.count

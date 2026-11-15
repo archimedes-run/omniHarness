@@ -379,8 +379,10 @@ async def _runner(request: Request, thread_id: str | None, user_id: str):
         sources = set(current)
 
     from app.policy.surface_run import SurfaceSnapshot
+    from omniharness.utils.off_loop import call_off_loop
 
-    tools = get_available_tools(selected_sources=sources, user_id=user_id, app_config=get_app_config(), artifact_tools=True)
+    # Off the event loop: connector toolkits start a process each.
+    tools = await call_off_loop(get_available_tools, selected_sources=sources, user_id=user_id, app_config=get_app_config(), artifact_tools=True)
     registry = {getattr(t, "name", ""): t for t in tools}
     # The proposer's tools, built once: checked and run from the same list.
     snapshot = SurfaceSnapshot(current)

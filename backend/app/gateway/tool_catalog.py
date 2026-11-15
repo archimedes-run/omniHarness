@@ -163,7 +163,10 @@ async def _mcp(config: Any, ruleset: Any) -> list[CatalogIntegration]:
     if not cache._cache_initialized:
         await cache.initialize_mcp_tools()
     names = list(servers.keys())
-    tools = refuse_builtin_collisions(cache.get_cached_mcp_tools() or [], "MCP", config)
+    from omniharness.utils.off_loop import call_off_loop
+
+    # Off the event loop: a stale cache reloads every MCP server here.
+    tools = refuse_builtin_collisions(await call_off_loop(cache.get_cached_mcp_tools) or [], "MCP", config)
     by_server: dict[str, list[Any]] = {}
     for tool in tools:
         server = _tool_source(tool.name, names)
@@ -262,7 +265,10 @@ async def build_tool_catalog(request: Any, config: Any, user_id: str | None) -> 
     ruleset, rules_error = _rules(config)
     apps, available = await _apps(request, config, user_id, ruleset)
     mcp = await _mcp(config, ruleset)
-    builtins = _builtins(config, ruleset)
+    from omniharness.utils.off_loop import call_off_loop
+
+    # Off the event loop, like every tool assembly in a request handler.
+    builtins = await call_off_loop(_builtins, config, ruleset)
     return ToolCatalog(integrations=[*apps, *mcp, *builtins], rules_error=rules_error, connectors_available=available)
 
 

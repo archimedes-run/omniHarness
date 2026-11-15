@@ -218,8 +218,19 @@ async def task_tool(
     selected_sources = sorted(raw_selection) if isinstance(raw_selection, (list, set, tuple)) else None
     # Spec 012: inherited from the agent that delegates (server-written metadata).
     parent_artifact_tools = metadata.get("artifact_tools") is True
-    tools = subagent_base_tools(
-        model_name=effective_model, tool_groups=parent_tool_groups, app_config=resolved_app_config, selected_sources=selected_sources, user_id=user_id, tool_access=parent_tool_access, artifact_tools=parent_artifact_tools
+    # Off the event loop (the run's loop is the gateway's): assembly can start
+    # a process per connector toolkit.
+    from omniharness.utils.off_loop import call_off_loop
+
+    tools = await call_off_loop(
+        subagent_base_tools,
+        model_name=effective_model,
+        tool_groups=parent_tool_groups,
+        app_config=resolved_app_config,
+        selected_sources=selected_sources,
+        user_id=user_id,
+        tool_access=parent_tool_access,
+        artifact_tools=parent_artifact_tools,
     )
 
     from omniharness.agents.tool_surface import subagent_surface
