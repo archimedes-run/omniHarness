@@ -14,6 +14,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
+from app.gateway.preview_frame import LIVE_PATH_RE
+
 CSRF_COOKIE_NAME = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_TOKEN_LENGTH = 64  # bytes
@@ -47,6 +49,12 @@ def should_check_csrf(request: Request) -> bool:
 
     # Exempt /api/v1/auth/me endpoint
     if path == "/api/v1/auth/me":
+        return False
+
+    # The live preview's frame link carries no ambient credential: the token
+    # in its path is the authorization (a forged cross-site request cannot
+    # know it), and the opaque frame has no CSRF cookie to send.
+    if LIVE_PATH_RE.match(path):
         return False
     return True
 

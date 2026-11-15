@@ -21,11 +21,11 @@ DESTRUCTIVE_POSTS = {
 
 #: DELETE methods that are not a harness deletion, with the reason.
 NOT_A_DELETION = {
-    # The preview proxy forwards any HTTP verb to the user's own preview app
-    # running in the thread's sandbox; it deletes nothing of the harness's and
-    # is owner-checked as a thread read.
-    "/api/threads/{thread_id}/previews/{preview_id}/proxy",
-    "/api/threads/{thread_id}/previews/{preview_id}/proxy/{path:path}",
+    # The live preview's frame link forwards any HTTP verb to the user's own
+    # preview app running in the thread's sandbox; it deletes nothing of the
+    # harness's and is authorized by the link's token for that one preview.
+    "/api/threads/{thread_id}/previews/{preview_id}/live/{token}",
+    "/api/threads/{thread_id}/previews/{preview_id}/live/{token}/{path:path}",
 }
 
 

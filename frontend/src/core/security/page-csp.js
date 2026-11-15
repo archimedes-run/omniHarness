@@ -35,7 +35,7 @@
  * The path prefixes a non-Apps page may frame, and why:
  * - /api/artifacts/   the locked frame for code artifacts (Spec 012 S2)
  * - /api/threads/     a chat's file previews and live preview sessions
- *                     (artifact-file-detail: /artifacts/..., /previews/.../proxy)
+ *                     (artifact-file-detail: /artifacts/..., /previews/.../live/...)
  * - /mermaid-frame/   the isolated mermaid drawing frame (Spec 012 FR-015)
  * - /mock/api/threads/ demo threads' files. Always listed: a page's policy is
  *                     fixed at its full load, and the app moves into a demo

@@ -1,10 +1,13 @@
 """Cookie-authenticated routes that can answer with model-authored HTML refuse a
 navigation another site (or an opaque frame) starts, even with the session
-cookie (Spec 012 S2 review): the thread file preview, the plain artifact view
-when it answers HTML, and the live preview proxy. A missing header keeps the
-old behaviour; nested preview assets (the token route) are untouched."""
+cookie (Spec 012 S2 review): the thread file preview and the plain artifact view
+when it answers HTML. The live preview has no cookie route any more (its frame
+link carries a token and a sandbox header). A missing header keeps the old
+behaviour; nested preview assets (the token route) are untouched."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 from _router_auth_helpers import make_authed_test_app
@@ -71,8 +74,11 @@ def test_the_plain_view_refuses_a_cross_site_navigation_to_html(tmp_path, monkey
 
 
 class _FakeManager:
+    def frame_session(self, **kwargs):
+        return SimpleNamespace(user_id="u1")
+
     async def proxy_request(self, **kwargs):
-        return Response("<!doctype html><p id=model>preview page</p>", media_type="text/html")
+        return Response("<!doctype html><p id=model>preview page</p>", media_type="text/html", headers={"Content-Security-Policy": "sandbox allow-scripts allow-forms"})
 
 
 def _proxy_client(monkeypatch):
@@ -83,16 +89,22 @@ def _proxy_client(monkeypatch):
 
 
 @pytest.mark.parametrize("path", ["/api/threads/thread-1/previews/p1/proxy", "/api/threads/thread-1/previews/p1/proxy/nested/page.html"])
-def test_the_preview_proxy_refuses_a_cross_site_navigation(monkeypatch, path):
+def test_the_cookie_preview_proxy_is_gone(monkeypatch, path):
+    """The live preview is served only on its frame link: the session cookie
+    gets no preview document on any path, whatever the request says it is."""
     with _proxy_client(monkeypatch) as client:
-        refused = client.get(path, headers=CROSS_FRAME)
-        own = client.get(path, headers=OWN_FRAME)
-        old = client.get(path)
-        asset = client.get(path, headers={"Sec-Fetch-Dest": "script", "Sec-Fetch-Site": "cross-site"})
-    assert refused.status_code == 403 and b"preview page" not in refused.content
-    assert own.status_code == 200 and b"preview page" in own.content
-    assert old.status_code == 200
-    assert asset.status_code == 200  # not a navigation: the proxy's own assets
+        for headers in (CROSS_FRAME, OWN_FRAME, TYPED, {}):
+            resp = client.get(path, headers=headers)
+            assert resp.status_code in (404, 405) and b"preview page" not in resp.content, headers
+
+
+def test_the_frame_link_serves_navigations_from_its_own_opaque_frame(monkeypatch):
+    """A link inside the live preview navigates the sandboxed frame (an opaque
+    origin, so cross-site): the frame link serves it, sandboxed by its header."""
+    with _proxy_client(monkeypatch) as client:
+        resp = client.get("/api/threads/thread-1/previews/p1/live/v1.1.x/next.html", headers=CROSS_FRAME)
+    assert resp.status_code == 200 and b"preview page" in resp.content
+    assert resp.headers["content-security-policy"].startswith("sandbox")
 
 
 def test_the_helper_is_shared_with_the_frame_route():

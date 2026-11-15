@@ -103,6 +103,8 @@ def test_atk_login_is_not_a_password_oracle_for_refused_accounts(sec) -> None:
 # fetched by the sandboxed (cookie-less) preview iframe. Exact path only.
 _PUBLIC = {"/api/channels/openclaw/webhook", "/api/v1/auth/login/local", "/api/v1/auth/register", "/api/v1/auth/logout", "/api/v1/auth/setup-status", "/api/v1/auth/initialize"}
 _PUBLIC.add("/api/threads/{thread_id}/artifacts/preview-runtime/storage-shim.js")
+# The live preview's frame link is authorized by the token in its path, never
+# by a session (tests/test_preview_frame.py: refused for any other owner).
 
 
 def test_atk_every_route_refuses_the_second_accounts_session(sec) -> None:
@@ -115,7 +117,7 @@ def test_atk_every_route_refuses_the_second_accounts_session(sec) -> None:
             continue
         path = re.sub(r"\{[^}]+\}", "x", route.path)
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
-            if "preview-token" in route.path:
+            if "preview-token" in route.path or "/live/{token}" in route.path:
                 continue
             resp = other.request(method, path, json={} if method in ("POST", "PUT", "PATCH") else None)
             if resp.status_code != 403:

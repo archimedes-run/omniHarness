@@ -119,6 +119,8 @@ def test_the_prefix_hack_migrates_to_disabled_at(make_gateway) -> None:
 # fetched by the sandboxed (cookie-less) preview iframe. Exact path only.
 _PUBLIC = {"/api/channels/openclaw/webhook", "/api/v1/auth/login/local", "/api/v1/auth/register", "/api/v1/auth/logout", "/api/v1/auth/setup-status", "/api/v1/auth/initialize"}
 _PUBLIC.add("/api/threads/{thread_id}/artifacts/preview-runtime/storage-shim.js")
+# The live preview's frame link is authorized by the token in its path, never
+# by a session (tests/test_preview_frame.py: refused for any other owner).
 
 
 def test_a_re_enabled_non_owner_reaches_no_route_at_all(sec) -> None:
@@ -147,7 +149,7 @@ def test_a_re_enabled_non_owner_reaches_no_route_at_all(sec) -> None:
     for route in sec.app.routes:
         methods = getattr(route, "methods", None)
         path = getattr(route, "path", "")
-        if not methods or path in _PUBLIC or path.startswith(("/docs", "/redoc", "/openapi", "/health")) or "preview-token" in path:
+        if not methods or path in _PUBLIC or path.startswith(("/docs", "/redoc", "/openapi", "/health")) or "preview-token" in path or "/live/{token}" in path:
             continue
         url = re.sub(r"\{[^}]+\}", "x", path)
         for method in sorted(methods - {"HEAD", "OPTIONS"}):

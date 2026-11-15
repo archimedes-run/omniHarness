@@ -193,7 +193,8 @@ def test_create_preview_session(preview_test_context) -> None:
     body = response.json()
     assert body["artifact_id"] == "dynamic-app"
     assert body["status"] == "running"
-    assert body["proxy_url"].endswith(f"/api/threads/thread-1/previews/{body['id']}/proxy")
+    # No standing link: the frame asks for a short-lived one (preview_frame.py).
+    assert "proxy_url" not in body
 
 
 def test_create_preview_session_rejects_root_outside_workspace(preview_test_context) -> None:
@@ -234,12 +235,14 @@ def test_preview_proxy_reaches_live_app(preview_test_context) -> None:
             },
         )
         preview_id = create_response.json()["id"]
-        html_response = client.get(f"/api/threads/thread-1/previews/{preview_id}/proxy/")
-        asset_response = client.get(f"/api/threads/thread-1/previews/{preview_id}/proxy/assets/app.js")
+        root = client.post(f"/api/threads/thread-1/previews/{preview_id}/frame").json()["frame_url"]
+        html_response = client.get(f"{root}/")
+        asset_response = client.get(f"{root}/assets/app.js")
 
+    assert root.startswith(f"/api/threads/thread-1/previews/{preview_id}/live/")
     assert html_response.status_code == 200
     assert "preview-ok" in html_response.text
-    assert f"/api/threads/thread-1/previews/{preview_id}/proxy/" in html_response.text
+    assert f'<script src="{root}/assets/app.js">' in html_response.text
     assert asset_response.status_code == 200
     assert asset_response.text == "console.log('preview-js-ok');"
 
@@ -609,3 +612,20 @@ def test_maybe_prepend_install_non_package_manager() -> None:
 def test_maybe_prepend_install_idempotent_fast_path() -> None:
     result = _maybe_prepend_install("npm run dev")
     assert result.count("npm install") == 1
+
+
+def test_the_live_preview_is_served_only_sandboxed(preview_test_context) -> None:
+    """The live preview is served on its frame link, sandboxed by its own
+    header (test_preview_frame.py). The session routes answer no preview
+    document: none at all, or one carrying the sandbox."""
+    app = _make_preview_app(user=preview_test_context["user"], manager=preview_test_context["manager"])
+    with TestClient(app) as client:
+        preview_id = client.post(
+            "/api/threads/thread-1/previews",
+            json={"artifact_id": "dynamic-app", "root_path": "/mnt/user-data/workspace/dynamic-app", "command": "npm run dev", "port": 3000},
+        ).json()["id"]
+        for path in ("proxy", "proxy/", "proxy/index.html", "proxy/assets/app.js"):
+            resp = client.get(f"/api/threads/thread-1/previews/{preview_id}/{path}", headers={"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin"})
+            served = resp.status_code == 200 and (b"preview-ok" in resp.content or b"preview-js-ok" in resp.content)
+            sandboxed = "sandbox" in resp.headers.get("content-security-policy", "")
+            assert not served or sandboxed, (path, resp.status_code, dict(resp.headers))
