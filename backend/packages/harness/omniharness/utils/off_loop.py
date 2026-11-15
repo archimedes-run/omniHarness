@@ -27,15 +27,27 @@ _UNSET = object()
 async def call_off_loop[T](fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
     """``fn(*args, **kwargs)`` in a worker thread, keeping its context changes."""
     context = contextvars.copy_context()
-    try:
-        result = await asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
-    except Exception:
-        # Raised (not cancelled: then the thread may still be running, and its
-        # half-made changes are not kept): what it set before raising stays
-        # set, as it would inline.
-        _adopt(context)
-        raise
+    future = asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, fn, *args, **kwargs))
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        try:
+            # Shielded: a cancellation is delivered when the call has
+            # returned, as it would be inline (an inline call cannot be
+            # interrupted), so a cancelled caller never moves on while the
+            # call is still running or with only half of its changes.
+            result = await asyncio.shield(future)
+            break
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except Exception:
+            # What it set before raising stays set, as it would inline.
+            _adopt(context)
+            if cancelled is not None:
+                raise cancelled from None
+            raise
     _adopt(context)
+    if cancelled is not None:
+        raise cancelled
     return result
 
 

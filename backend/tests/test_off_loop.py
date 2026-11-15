@@ -50,6 +50,27 @@ async def test_what_it_set_before_raising_stays_set():
 
 
 @pytest.mark.anyio
+async def test_a_cancelled_caller_is_cancelled_once_the_call_has_returned():
+    """As inline: the call cannot be interrupted, so the caller does not move
+    on while it is still running, and keeps what it set."""
+    import time
+
+    finished = threading.Event()
+
+    def assemble() -> None:
+        time.sleep(0.3)
+        _VAR.set("finished")
+        finished.set()
+
+    task = asyncio.ensure_future(call_off_loop(assemble))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+
+
+@pytest.mark.anyio
 async def test_deferred_tool_registry_reaches_the_caller():
     from omniharness.tools.builtins.tool_search import DeferredToolRegistry, get_deferred_registry, reset_deferred_registry, set_deferred_registry
 
