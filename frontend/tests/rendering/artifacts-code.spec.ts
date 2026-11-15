@@ -112,10 +112,16 @@ for (const theme of ["light", "dark"] as const) {
       await card.scrollIntoViewIfNeeded();
       await shot(page, `chat-card-${theme}-${width}`);
 
-      await card.getByTestId("artifact-card-open").click();
       const panel = page.locator(
         `[data-testid=artifact-panel][data-artifact="${PAGE_ID}"]`,
       );
+      // The live frame can still resize the card (its size message) as the
+      // click lands, moving Open from under the pointer: press until the
+      // panel opens.
+      await expect(async () => {
+        await card.getByTestId("artifact-card-open").click();
+        await expect(panel).toBeVisible({ timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
       await expect(
         panel.locator('[data-testid="artifact-frame"]'),
       ).toBeVisible();
