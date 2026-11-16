@@ -9,14 +9,11 @@ import {
 } from "react";
 
 import { useSidebar } from "@/components/ui/sidebar";
+import {
+  registerPreview,
+  type BuildPreviewDetails,
+} from "@/core/artifacts/build-preview";
 import { env } from "@/env";
-
-export interface BuildPreviewDetails {
-  threadId: string;
-  title: string;
-  sample: boolean;
-  appId?: string;
-}
 
 export interface ArtifactsContextType {
   buildPreviews: Record<string, BuildPreviewDetails>;
@@ -48,11 +45,7 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
   >({});
   const registerBuildPreview = useCallback(
     (path: string, details: BuildPreviewDetails) => {
-      setBuildPreviews((previous) => {
-        if (JSON.stringify(previous[path]) === JSON.stringify(details))
-          return previous;
-        return { ...previous, [path]: details };
-      });
+      setBuildPreviews((previous) => registerPreview(previous, path, details));
     },
     [],
   );

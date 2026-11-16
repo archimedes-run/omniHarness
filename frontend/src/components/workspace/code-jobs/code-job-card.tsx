@@ -236,6 +236,9 @@ function JobView({
     if (published)
       registerBuildPreview(published.path, {
         threadId,
+        jobId: job.id,
+        publishedAt:
+          Date.parse(job.finished_at ?? job.updated_at ?? job.created_at) || 0,
         title: registration?.name ?? job.title,
         sample: samplePreview,
         appId: registration?.app_id,
@@ -244,6 +247,10 @@ function JobView({
     published,
     registration,
     job.title,
+    job.id,
+    job.finished_at,
+    job.updated_at,
+    job.created_at,
     samplePreview,
     registerBuildPreview,
     threadId,
