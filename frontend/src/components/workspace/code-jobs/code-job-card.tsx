@@ -16,7 +16,6 @@ import {
   WrenchIcon,
   XIcon,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -375,13 +374,13 @@ function JobView({
           <div className="flex flex-wrap items-center gap-2">
             {registration && (
               <Button size="sm" asChild>
-                <Link
+                <a
                   href={`/workspace/apps/${encodeURIComponent(registration.app_id)}`}
                   data-testid="code-job-open-registered-app"
                 >
                   <AppWindowIcon className="size-3.5" aria-hidden />
                   Open the app
-                </Link>
+                </a>
               </Button>
             )}
             {published && (
@@ -821,12 +820,12 @@ function AppRegisteredEvidence({
         {state ? (
           <span data-testid="code-job-app-state">{` — ${state}`}</span>
         ) : null}{" "}
-        <Link
+        <a
           href={`/workspace/apps/${encodeURIComponent(registration.app_id)}`}
           className="text-primary underline-offset-2 hover:underline"
         >
           Open
-        </Link>
+        </a>
       </span>
     </li>
   );

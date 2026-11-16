@@ -19,7 +19,6 @@ import {
   XIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import {
   Component,
   type ReactNode,
@@ -592,12 +591,12 @@ function ArtifactFileDetailInner({
               : "File preview"}
         </span>
         {buildPreview?.appId && (
-          <Link
+          <a
             className="text-primary underline"
             href={`/workspace/apps/${encodeURIComponent(buildPreview.appId)}`}
           >
             Open the real app
-          </Link>
+          </a>
         )}
         {buildPreview && (
           <SaveToArtifacts
