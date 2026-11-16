@@ -75,6 +75,7 @@ import { canRebuild, CodeKindView } from "./artifact-code-kind";
 import { ArtifactContent, codeOf, KindIcon } from "./artifact-content";
 import { VersionsDrawer } from "./artifact-versions";
 import {
+  ViewerHeader,
   AskBox,
   CheckChip,
   DeviceToggles,
@@ -287,10 +288,7 @@ function Viewer({
       data-compact={compact ? "true" : "false"}
       aria-label={title}
     >
-      <header
-        className="border-border flex h-[60px] min-w-0 shrink-0 items-center gap-1.5 border-b pr-3.5 pl-5 max-sm:pr-2 max-sm:pl-3 pointer-coarse:h-auto pointer-coarse:min-h-[60px]"
-        data-testid="artifact-header"
-      >
+      <ViewerHeader data-testid="artifact-header">
         <KindIcon
           kind={artifact.kind}
           className="text-muted-foreground size-[18px] max-sm:hidden"
@@ -605,7 +603,7 @@ function Viewer({
             <XIcon />
           </IconButton>
         )}
-      </header>
+      </ViewerHeader>
 
       <div
         className="border-border flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b px-5 py-2.5 max-sm:px-3"

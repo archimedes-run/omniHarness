@@ -206,7 +206,7 @@ function JobView({
     : now.getTime();
   const elapsed = (ended - started) / 1000;
   const stop = useStopCodeJob({ threadId, toolCallId });
-  const { select, setOpen } = useArtifacts();
+  const { select, setOpen, registerBuildPreview } = useArtifacts();
   const queryClient = useQueryClient();
   const stepsId = useId();
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -230,6 +230,31 @@ function JobView({
 
   const result = job.result;
   const published = result?.published;
+  const registration = result?.app_registration;
+  const samplePreview = Boolean(result?.app_checks ?? registration);
+  useEffect(() => {
+    if (published)
+      registerBuildPreview(published.path, {
+        threadId,
+        jobId: job.id,
+        publishedAt:
+          Date.parse(job.finished_at ?? job.updated_at ?? job.created_at) || 0,
+        title: registration?.name ?? job.title,
+        sample: samplePreview,
+        appId: registration?.app_id,
+      });
+  }, [
+    published,
+    registration,
+    job.title,
+    job.id,
+    job.finished_at,
+    job.updated_at,
+    job.created_at,
+    samplePreview,
+    registerBuildPreview,
+    threadId,
+  ]);
   // An app whose layout check failed is still shown, and says so.
   const layoutFailed = result?.layout?.outcome === "fail";
   const layoutNoAnswer = !!result?.layout && countedNoAnswer(result.layout);
@@ -338,7 +363,7 @@ function JobView({
         <Evidence job={job} />
       )}
 
-      {!running && published ? (
+      {!running && (published || registration) ? (
         <div
           ref={actionsRef}
           className="border-t px-3 py-2"
@@ -348,27 +373,45 @@ function JobView({
           data-testid="code-job-actions"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              onClick={() => {
-                // The built index.html itself: the panel opens it in preview.
-                select(published.path);
-                setOpen(true);
-              }}
-              data-testid="code-job-open-app"
-            >
-              <AppWindowIcon className="size-3.5" aria-hidden />
-              {layoutFailed
-                ? "Open the app (layout check failed)"
-                : layoutNoAnswer
-                  ? "Open the app (layout not checked)"
-                  : "Open the app"}
-            </Button>
-            {/* The published DIRECTORY: saved as one web app. */}
-            <SaveToArtifacts
-              threadId={threadId}
-              path={webAppDirOf(published.path)}
-            />
+            {registration && (
+              <Button size="sm" asChild>
+                <Link
+                  href={`/workspace/apps/${encodeURIComponent(registration.app_id)}`}
+                  data-testid="code-job-open-registered-app"
+                >
+                  <AppWindowIcon className="size-3.5" aria-hidden />
+                  Open the app
+                </Link>
+              </Button>
+            )}
+            {published && (
+              <>
+                <Button
+                  size="sm"
+                  variant={registration ? "outline" : "default"}
+                  onClick={() => {
+                    // This is the build output, never the registered app.
+                    select(published.path);
+                    setOpen(true);
+                  }}
+                  data-testid="code-job-open-app"
+                >
+                  <AppWindowIcon className="size-3.5" aria-hidden />
+                  {samplePreview
+                    ? "Build preview (sample data)"
+                    : layoutFailed
+                      ? "Open the app (layout check failed)"
+                      : layoutNoAnswer
+                        ? "Open the app (layout not checked)"
+                        : "Open the app"}
+                </Button>
+                {/* The published DIRECTORY: saved as one web app. */}
+                <SaveToArtifacts
+                  threadId={threadId}
+                  path={webAppDirOf(published.path)}
+                />
+              </>
+            )}
           </div>
         </div>
       ) : null}

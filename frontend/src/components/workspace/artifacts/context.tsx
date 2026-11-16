@@ -9,9 +9,15 @@ import {
 } from "react";
 
 import { useSidebar } from "@/components/ui/sidebar";
+import {
+  registerPreview,
+  type BuildPreviewDetails,
+} from "@/core/artifacts/build-preview";
 import { env } from "@/env";
 
 export interface ArtifactsContextType {
+  buildPreviews: Record<string, BuildPreviewDetails>;
+  registerBuildPreview: (path: string, details: BuildPreviewDetails) => void;
   artifacts: string[];
   setArtifacts: (artifacts: string[]) => void;
 
@@ -34,6 +40,15 @@ interface ArtifactsProviderProps {
 }
 
 export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
+  const [buildPreviews, setBuildPreviews] = useState<
+    Record<string, BuildPreviewDetails>
+  >({});
+  const registerBuildPreview = useCallback(
+    (path: string, details: BuildPreviewDetails) => {
+      setBuildPreviews((previous) => registerPreview(previous, path, details));
+    },
+    [],
+  );
   const [artifacts, setArtifacts] = useState<string[]>([]);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [autoSelect, setAutoSelect] = useState(true);
@@ -76,6 +91,8 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     () => ({
       artifacts,
       setArtifacts,
+      buildPreviews,
+      registerBuildPreview,
       open,
       autoOpen,
       autoSelect,
@@ -87,6 +104,8 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     [
       artifacts,
       setArtifacts,
+      buildPreviews,
+      registerBuildPreview,
       open,
       autoOpen,
       autoSelect,

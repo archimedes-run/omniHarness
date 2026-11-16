@@ -11,14 +11,15 @@ import {
   FolderOpenIcon,
   FolderTreeIcon,
   LoaderIcon,
+  MaximizeIcon,
   PackageIcon,
   PlayIcon,
-  RotateCcwIcon,
   SquareArrowOutUpRightIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   Component,
   type ReactNode,
@@ -31,14 +32,7 @@ import {
 import { toast } from "sonner";
 import type { Components } from "streamdown";
 
-import {
-  Artifact,
-  ArtifactAction,
-  ArtifactActions,
-  ArtifactContent,
-  ArtifactHeader,
-  ArtifactTitle,
-} from "@/components/ai-elements/artifact";
+import { Artifact, ArtifactContent } from "@/components/ai-elements/artifact";
 import { Markdown as Streamdown } from "@/components/ai-elements/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,7 +43,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { ArtifactManifest, ProjectFileEntry } from "@/core/artifacts/api";
 import {
   useArtifactContent,
@@ -65,6 +58,7 @@ import {
   useWorkspaceFileContent,
   useWorkspaceFiles,
 } from "@/core/artifacts/hooks";
+import { webAppDirOf } from "@/core/artifacts/store-logic";
 import {
   artifactDisplayName,
   normalizeArtifactEntries,
@@ -81,7 +75,6 @@ import { cn } from "@/lib/utils";
 
 import { ArtifactLink } from "../citations/artifact-link";
 import { useThread } from "../messages/context";
-import { Tooltip } from "../tooltip";
 
 type PreviewStatus = "starting" | "running" | "failed" | "stopped";
 
@@ -102,6 +95,14 @@ function statusBadgeClass(status: PreviewStatus | "not running" | undefined) {
 }
 
 import { useArtifacts } from "./context";
+import { SaveToArtifacts } from "./store/save-to-artifacts";
+import {
+  ViewerHeader,
+  IconButton,
+  DeviceToggles,
+  DEVICE_WIDTH,
+  type Device,
+} from "./store/viewer-parts";
 
 // codemirror is ~470 KB; it loads when an artifact's editor is shown, not with
 // every chat page (Phase 2.5).
@@ -157,7 +158,9 @@ function ArtifactFileDetailInner({
   threadId: string;
 }) {
   const { t } = useI18n();
-  const { artifacts, setOpen, select } = useArtifacts();
+  const { artifacts, setOpen, select, buildPreviews } = useArtifacts();
+  const previewBox = useRef<HTMLDivElement>(null);
+  const [device, setDevice] = useState<Device>("desk");
   const { manifests } = useArtifactManifests({ threadId });
   const normalizedArtifacts = useMemo(() => {
     return normalizeArtifactEntries(artifacts ?? []);
@@ -184,6 +187,10 @@ function ArtifactFileDetailInner({
     }
     return filepathFromProps;
   }, [filepathFromProps, isWriteFile, manifest]);
+  const buildPreview =
+    buildPreviews[filepath]?.threadId === threadId
+      ? buildPreviews[filepath]
+      : undefined;
   const isSkillFile = useMemo(() => {
     return filepath.endsWith(".skill");
   }, [filepath]);
@@ -400,295 +407,278 @@ function ArtifactFileDetailInner({
   }, [previewSession, stopPreview, threadId]);
 
   return (
-    <Artifact className={cn(className)}>
-      <ArtifactHeader className="gap-1 px-2">
-        <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
-          <ArtifactTitle className="min-w-0 overflow-hidden">
-            {isWriteFile ? (
-              <div className="truncate px-2 text-sm">
-                {getFileName(filepath)}
-              </div>
-            ) : (
-              <Select value={filepathFromProps} onValueChange={select}>
-                <SelectTrigger className="max-w-40 min-w-0 truncate border-none bg-transparent! shadow-none select-none focus:outline-0 active:outline-0">
-                  <SelectValue placeholder="Select a file" />
-                </SelectTrigger>
-                <SelectContent className="select-none">
-                  <SelectGroup>
-                    {normalizedArtifacts.map((artifact) => (
-                      <SelectItem key={artifact} value={artifact}>
-                        {artifactDisplayName(artifact, manifests, getFileName)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            )}
-          </ArtifactTitle>
-          {isDynamicManifest && (
-            <Badge
-              variant="outline"
-              className={cn(
-                "hidden shrink-0 rounded text-[10px] sm:flex",
-                statusBadgeClass(
-                  previewSession?.status ??
-                    (createPreviewFromManifest.isPending
-                      ? "starting"
-                      : "not running"),
-                ),
-              )}
-            >
-              <ActivityIcon className="mr-1 size-3" />
-              {previewSession?.status ??
-                (createPreviewFromManifest.isPending
-                  ? "starting"
-                  : "not running")}
-            </Badge>
+    <Artifact
+      className={cn("bg-card rounded-none border-0 shadow-none", className)}
+    >
+      <ViewerHeader className="flex-wrap py-2" data-testid="file-viewer-header">
+        <FileIcon
+          className="text-muted-foreground size-[18px] shrink-0"
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1">
+          <h2
+            className="truncate text-base font-semibold"
+            title={buildPreview?.title ?? getFileName(filepath)}
+          >
+            {buildPreview?.title ??
+              artifactDisplayName(filepathFromProps, manifests, getFileName)}
+          </h2>
+          {!isWriteFile && normalizedArtifacts.length > 1 && (
+            <Select value={filepathFromProps} onValueChange={select}>
+              <SelectTrigger
+                aria-label="Select a file"
+                className="h-6 max-w-48 border-none bg-transparent! p-0 text-xs shadow-none"
+              >
+                <SelectValue placeholder="Select a file" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {normalizedArtifacts.map((artifact) => (
+                    <SelectItem key={artifact} value={artifact}>
+                      {artifactDisplayName(artifact, manifests, getFileName)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           )}
         </div>
-        <div className="flex shrink-0 items-center justify-center">
-          {isDynamicManifest && (
-            <ToggleGroup
-              className="mx-auto"
-              type="single"
-              variant="outline"
-              size="sm"
-              value={viewMode}
-              onValueChange={(value) => {
-                if (value) {
-                  setViewMode(value as "preview" | "logs" | "files");
-                }
+        <div
+          role="toolbar"
+          aria-label="Artifact actions"
+          className="flex flex-wrap items-center gap-1"
+        >
+          {(isSupportPreview || isDynamicManifest) && (
+            <IconButton
+              label="Preview"
+              pressed={viewMode === "preview"}
+              onClick={() => setViewMode("preview")}
+            >
+              <EyeIcon />
+            </IconButton>
+          )}
+          {!isDynamicManifest && isCodeFile && (
+            <IconButton
+              label="Code"
+              pressed={viewMode === "code"}
+              onClick={() => setViewMode("code")}
+            >
+              <Code2Icon />
+            </IconButton>
+          )}
+          {!isWriteFile && (
+            <IconButton
+              label={t.common.download}
+              onClick={() => {
+                window.open(
+                  urlOfArtifact({ filepath, threadId, download: true, isMock }),
+                  "_blank",
+                  "noopener,noreferrer",
+                );
               }}
             >
-              <ToggleGroupItem value="preview" aria-label="Preview">
-                <EyeIcon />
-              </ToggleGroupItem>
-              <ToggleGroupItem value="logs" aria-label="Logs">
+              <DownloadIcon />
+            </IconButton>
+          )}
+          {(manifest ?? workspaceProjectRoot) && (
+            <IconButton
+              label="Files"
+              pressed={viewMode === "files"}
+              onClick={() => setViewMode("files")}
+            >
+              <FolderTreeIcon />
+            </IconButton>
+          )}
+          {isDynamicManifest && (
+            <>
+              <IconButton
+                label="Logs"
+                pressed={viewMode === "logs"}
+                onClick={() => setViewMode("logs")}
+              >
                 <ActivityIcon />
-              </ToggleGroupItem>
-              <ToggleGroupItem value="files" aria-label="Files">
-                <FolderTreeIcon />
-              </ToggleGroupItem>
-            </ToggleGroup>
+              </IconButton>
+              <IconButton
+                label={previewSession ? "Restart preview" : "Start preview"}
+                disabled={
+                  createPreviewFromManifest.isPending ||
+                  restartPreview.isPending
+                }
+                onClick={() => {
+                  void handleRestartPreview();
+                }}
+              >
+                <PlayIcon />
+              </IconButton>
+              <IconButton
+                label="Stop preview"
+                disabled={!previewSession || stopPreview.isPending}
+                onClick={() => {
+                  void handleStopPreview();
+                }}
+              >
+                <SquareIcon />
+              </IconButton>
+            </>
           )}
-          {!isDynamicManifest && (isSupportPreview || manifest) && (
-            <ToggleGroup
-              className="mx-auto"
-              type="single"
-              variant="outline"
-              size="sm"
-              value={viewMode}
-              onValueChange={(value) => {
-                if (value) {
-                  setViewMode(value as "code" | "preview" | "files");
+          {!isDynamicManifest && isCodeFile && (
+            <IconButton
+              label={t.clipboard.copyToClipboard}
+              disabled={!content}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(displayContent);
+                  toast.success(t.clipboard.copiedToClipboard);
+                } catch {
+                  toast.error("Failed to copy to clipboard");
                 }
               }}
             >
-              {isCodeFile && (
-                <ToggleGroupItem value="code">
-                  <Code2Icon />
-                </ToggleGroupItem>
-              )}
-              {isSupportPreview && (
-                <ToggleGroupItem value="preview">
-                  <EyeIcon />
-                </ToggleGroupItem>
-              )}
-              {manifest && (
-                <ToggleGroupItem value="files">
-                  <FolderTreeIcon />
-                </ToggleGroupItem>
-              )}
-            </ToggleGroup>
+              <CopyIcon />
+            </IconButton>
           )}
-          {isWriteFile && workspaceProjectRoot && (
-            <ToggleGroup
-              className="mx-auto"
-              type="single"
-              variant="outline"
-              size="sm"
-              value={viewMode}
-              onValueChange={(value) => {
-                if (value) {
-                  setViewMode(value as "code" | "files");
-                }
+          {!isWriteFile && filepath.endsWith(".skill") && (
+            <IconButton
+              label={t.common.install}
+              disabled={
+                isInstalling || env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"
+              }
+              onClick={handleInstallSkill}
+            >
+              <PackageIcon />
+            </IconButton>
+          )}
+          {!isWriteFile && (
+            <IconButton
+              label={t.common.openInNewWindow}
+              onClick={() => {
+                window.open(
+                  previewUrl ?? urlOfArtifact({ filepath, threadId, isMock }),
+                  "_blank",
+                  "noopener,noreferrer",
+                );
               }}
             >
-              <ToggleGroupItem value="code">
-                <Code2Icon />
-              </ToggleGroupItem>
-              <ToggleGroupItem value="files">
-                <FolderTreeIcon />
-              </ToggleGroupItem>
-            </ToggleGroup>
+              <SquareArrowOutUpRightIcon />
+            </IconButton>
           )}
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <ArtifactActions>
-            {!isWriteFile && filepath.endsWith(".skill") && (
-              <Tooltip content={t.toolCalls.skillInstallTooltip}>
-                <ArtifactAction
-                  icon={isInstalling ? LoaderIcon : PackageIcon}
-                  label={t.common.install}
-                  tooltip={t.common.install}
-                  disabled={
-                    isInstalling ||
-                    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"
-                  }
-                  onClick={handleInstallSkill}
-                />
-              </Tooltip>
-            )}
-            {!isWriteFile && (
-              <ArtifactAction
-                icon={SquareArrowOutUpRightIcon}
-                label={t.common.openInNewWindow}
-                tooltip={t.common.openInNewWindow}
-                onClick={() => {
-                  const targetUrl =
-                    previewUrl ??
-                    urlOfArtifact({
-                      filepath,
-                      threadId,
-                      isMock,
-                    });
-                  const w = window.open(
-                    targetUrl,
-                    "_blank",
-                    "noopener,noreferrer",
-                  );
-                  if (w) w.opener = null;
-                }}
-              />
-            )}
-            {isDynamicManifest && (
-              <>
-                <ArtifactAction
-                  icon={previewSession ? RotateCcwIcon : PlayIcon}
-                  label={previewSession ? "Restart preview" : "Start preview"}
-                  tooltip={previewSession ? "Restart preview" : "Start preview"}
-                  disabled={
-                    createPreviewFromManifest.isPending ||
-                    restartPreview.isPending
-                  }
-                  onClick={() => {
-                    void handleRestartPreview();
-                  }}
-                />
-                <ArtifactAction
-                  icon={SquareIcon}
-                  label="Stop preview"
-                  tooltip="Stop preview"
-                  disabled={!previewSession || stopPreview.isPending}
-                  onClick={() => {
-                    void handleStopPreview();
-                  }}
-                />
-              </>
-            )}
-            {!isDynamicManifest && isCodeFile && (
-              <ArtifactAction
-                icon={CopyIcon}
-                label={t.clipboard.copyToClipboard}
-                disabled={!content}
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(displayContent ?? "");
-                    toast.success(t.clipboard.copiedToClipboard);
-                  } catch (error) {
-                    toast.error("Failed to copy to clipboard");
-                    console.error(error);
-                  }
-                }}
-                tooltip={t.clipboard.copyToClipboard}
-              />
-            )}
-            {!isWriteFile && (
-              <ArtifactAction
-                icon={DownloadIcon}
-                label={t.common.download}
-                tooltip={t.common.download}
-                onClick={() => {
-                  const w = window.open(
-                    urlOfArtifact({
-                      filepath,
-                      threadId,
-                      download: true,
-                      isMock,
-                    }),
-                    "_blank",
-                    "noopener,noreferrer",
-                  );
-                  if (w) w.opener = null;
-                }}
-              />
-            )}
-            <ArtifactAction
-              icon={XIcon}
-              label={t.common.close}
-              onClick={() => setOpen(false)}
-              tooltip={t.common.close}
-            />
-          </ArtifactActions>
-        </div>
-      </ArtifactHeader>
-      <ArtifactContent className="p-0">
-        {isDynamicManifest && manifest && viewMode === "files" && (
-          <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
-        )}
-        {isDynamicManifest && manifest && viewMode !== "files" && (
-          <DynamicArtifactPreviewPanel
-            key={`${previewSession?.id ?? "preview"}-${previewReloadKey}`}
-            manifest={manifest}
-            previewUrl={previewUrl}
-            previewStatus={previewSession?.status}
-            previewError={previewSession?.error}
-            previewCreateError={previewCreateError}
-            isCreating={createPreviewFromManifest.isPending}
-            logs={previewLogs?.logs ?? ""}
-            logsStatus={previewLogs?.status ?? previewSession?.status}
-            viewMode={viewMode}
-            onStartPreview={() => {
-              void handleRestartPreview();
+          <IconButton
+            label="Full screen"
+            onClick={() => {
+              void previewBox.current
+                ?.requestFullscreen?.()
+                .catch(() => undefined);
             }}
+          >
+            <MaximizeIcon />
+          </IconButton>
+          <IconButton label={t.common.close} onClick={() => setOpen(false)}>
+            <XIcon />
+          </IconButton>
+        </div>
+      </ViewerHeader>
+      <div
+        className="border-border flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs"
+        data-testid="file-preview-info"
+      >
+        <span
+          className="text-muted-foreground min-w-48 flex-1 max-sm:basis-full"
+          role="status"
+        >
+          {buildPreview?.sample
+            ? "Sample data — build preview. This is not your live app."
+            : isDynamicManifest
+              ? `Live development preview · ${previewSession?.status ?? "not running"}`
+              : "File preview"}
+        </span>
+        {buildPreview?.appId && (
+          <Link
+            className="text-primary underline"
+            href={`/workspace/apps/${encodeURIComponent(buildPreview.appId)}`}
+          >
+            Open the real app
+          </Link>
+        )}
+        {buildPreview && (
+          <SaveToArtifacts
+            compact
+            threadId={threadId}
+            path={webAppDirOf(filepath)}
           />
         )}
-        {!isDynamicManifest && viewMode === "files" && manifest && (
-          <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
+        {(isSupportPreview || isDynamicManifest) && (
+          <DeviceToggles device={device} onChange={setDevice} />
         )}
-        {isWriteFile &&
-          viewMode === "files" &&
-          workspaceProjectRoot &&
-          !manifest && (
-            <ProjectFilesPanel
-              threadId={threadId}
-              workspaceRoot={workspaceProjectRoot}
-            />
-          )}
-        {!isDynamicManifest &&
-          isSupportPreview &&
-          viewMode === "preview" &&
-          (language === "markdown" || language === "html") && (
-            <ArtifactFilePreview
-              content={displayContent}
-              language={language ?? "text"}
-              previewUrl={previewUrl}
-            />
-          )}
-        {!isDynamicManifest && isCodeFile && viewMode === "code" && (
-          <CodeEditor
-            className="size-full resize-none rounded-none border-none"
-            value={displayContent ?? ""}
-            readonly
-          />
-        )}
-        {!isDynamicManifest && !isCodeFile && (
-          <iframe
-            className="size-full"
-            src={urlOfArtifact({ filepath, threadId, isMock })}
-          />
-        )}
-      </ArtifactContent>
+      </div>
+      <div
+        ref={previewBox}
+        className="bg-background min-h-0 flex-1 overflow-auto"
+      >
+        <div
+          className="mx-auto h-full max-w-full"
+          style={{
+            width: viewMode === "preview" ? DEVICE_WIDTH[device] : "100%",
+          }}
+        >
+          <ArtifactContent className="h-full p-0">
+            {isDynamicManifest && manifest && viewMode === "files" && (
+              <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
+            )}
+            {isDynamicManifest && manifest && viewMode !== "files" && (
+              <DynamicArtifactPreviewPanel
+                key={`${previewSession?.id ?? "preview"}-${previewReloadKey}`}
+                manifest={manifest}
+                previewUrl={previewUrl}
+                previewStatus={previewSession?.status}
+                previewError={previewSession?.error}
+                previewCreateError={previewCreateError}
+                isCreating={createPreviewFromManifest.isPending}
+                logs={previewLogs?.logs ?? ""}
+                logsStatus={previewLogs?.status ?? previewSession?.status}
+                viewMode={viewMode}
+                onStartPreview={() => {
+                  void handleRestartPreview();
+                }}
+              />
+            )}
+            {!isDynamicManifest && viewMode === "files" && manifest && (
+              <ProjectFilesPanel artifactId={manifest.id} threadId={threadId} />
+            )}
+            {isWriteFile &&
+              viewMode === "files" &&
+              workspaceProjectRoot &&
+              !manifest && (
+                <ProjectFilesPanel
+                  threadId={threadId}
+                  workspaceRoot={workspaceProjectRoot}
+                />
+              )}
+            {!isDynamicManifest &&
+              isSupportPreview &&
+              viewMode === "preview" &&
+              (language === "markdown" || language === "html") && (
+                <ArtifactFilePreview
+                  content={displayContent}
+                  language={language ?? "text"}
+                  previewUrl={previewUrl}
+                />
+              )}
+            {!isDynamicManifest && isCodeFile && viewMode === "code" && (
+              <CodeEditor
+                className="size-full resize-none rounded-none border-none"
+                value={displayContent ?? ""}
+                readonly
+              />
+            )}
+            {!isDynamicManifest && !isCodeFile && (
+              <iframe
+                className="size-full"
+                src={urlOfArtifact({ filepath, threadId, isMock })}
+              />
+            )}
+          </ArtifactContent>
+        </div>
+      </div>
     </Artifact>
   );
 }

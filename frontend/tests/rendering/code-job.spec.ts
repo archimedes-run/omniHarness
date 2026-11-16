@@ -402,6 +402,12 @@ for (const scheme of ["light", "dark"] as const) {
         "Open the app",
       );
       await card.getByTestId("code-job-open-app").click();
+      await expect(page.getByTestId("file-preview-info")).toContainText(
+        "File preview",
+      );
+      await expect(page.getByTestId("file-preview-info")).not.toContainText(
+        "Sample data",
+      );
       // The built page opens in the artifact panel's preview.
       await expect(
         page
@@ -411,6 +417,143 @@ for (const scheme of ["light", "dark"] as const) {
       ).toBeVisible();
       if (SHOTS)
         await page.screenshot({ path: `${SHOTS}/code-job-app-${scheme}.png` });
+    });
+
+    test("registered apps open the real app and identify their sample preview", async ({
+      page,
+    }) => {
+      await open(
+        page,
+        scheme,
+        {
+          job: job("verified", {
+            result: {
+              ...VERIFIED_RESULT,
+              app_registration: {
+                app_id: "today",
+                version: 5,
+                name: "Today",
+                needs_approval: false,
+                url: "/workspace/apps/today",
+              },
+            },
+          }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      const appLink = card.getByTestId("code-job-open-registered-app");
+      await expect(appLink).toHaveText("Open the app");
+      await expect(appLink).toHaveAttribute("href", "/workspace/apps/today");
+      await expect(card.getByTestId("code-job-open-app")).toHaveText(
+        "Build preview (sample data)",
+      );
+      await card.getByTestId("code-job-open-app").click();
+      await expect(page.getByTestId("file-preview-info")).toContainText(
+        "Sample data — build preview. This is not your live app.",
+      );
+      await expect(
+        page.getByRole("link", { name: "Open the real app" }),
+      ).toHaveAttribute("href", "/workspace/apps/today");
+      const toolbar = page.getByRole("toolbar", { name: "Artifact actions" });
+      await expect(
+        toolbar.getByRole("button", { name: "Preview", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await toolbar.getByRole("button", { name: "Code", exact: true }).click();
+      await expect(
+        toolbar.getByRole("button", { name: "Code", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await toolbar
+        .getByRole("button", { name: "Preview", exact: true })
+        .click();
+      await page.getByTestId("artifact-device-phone").click();
+      await expect(page.getByTestId("artifact-device-phone")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await expect(
+        page
+          .frameLocator("iframe")
+          .first()
+          .getByRole("button", { name: "count is 0" }),
+      ).toBeVisible();
+      if (SHOTS)
+        await page.screenshot({
+          path: `${SHOTS}/sample-preview-${scheme}.png`,
+        });
+      for (const width of [390, 360]) {
+        await page.setViewportSize({ width, height: 844 });
+        const dialog = page.getByRole("dialog", {
+          name: "Artifact",
+          exact: true,
+        });
+        await expect(dialog).toBeVisible();
+        await expect(
+          dialog.getByText(
+            "Sample data — build preview. This is not your live app.",
+          ),
+        ).toBeVisible();
+        expect(
+          await dialog.evaluate((e) => e.scrollWidth <= e.clientWidth),
+        ).toBe(true);
+        const notice = await dialog
+          .getByTestId("file-preview-info")
+          .getByRole("status")
+          .boundingBox();
+        expect(notice!.width).toBeGreaterThan(280);
+        expect(notice!.height).toBeLessThan(60);
+        if (SHOTS)
+          await page.screenshot({
+            path: `${SHOTS}/sample-preview-${scheme}-${width}.png`,
+          });
+      }
+      await toolbar.getByRole("button", { name: "Close", exact: true }).click();
+      await expect(
+        page.getByRole("dialog", { name: "Artifact", exact: true }),
+      ).toHaveCount(0);
+      await expect(appLink).toBeVisible();
+      await page.route("**/workspace/apps/today", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: "<h1>Registered app destination</h1>",
+        }),
+      );
+      await appLink.click();
+      await expect(page).toHaveURL(/\/workspace\/apps\/today$/);
+    });
+
+    test("a registered app still opens when no build preview was published", async ({
+      page,
+    }) => {
+      await open(
+        page,
+        scheme,
+        {
+          job: job("verified", {
+            result: {
+              ...VERIFIED_RESULT,
+              published: null,
+              app_registration: {
+                app_id: "today",
+                version: 5,
+                name: "Today",
+                needs_approval: true,
+                url: "/workspace/apps/today",
+              },
+            },
+          }),
+          steps: STEPS,
+          month: { spent_usd: 0.31, cap_usd: 20 },
+        },
+        true,
+      );
+      const card = page.getByTestId("code-job-card");
+      await expect(
+        card.getByTestId("code-job-open-registered-app"),
+      ).toHaveAttribute("href", "/workspace/apps/today");
+      await expect(card.getByTestId("code-job-open-app")).toHaveCount(0);
     });
 
     test("a coding job made beside another tool call keeps that call's card", async ({

@@ -133,11 +133,9 @@ async function openPreview(page: Page, app: App): Promise<Frame> {
     })
     .first()
     .click();
-  // The Preview toggle (its eye icon: the same on builds before it was named).
   await page
-    .locator("[role=radio]")
-    .filter({ has: page.locator("svg.lucide-eye") })
-    .first()
+    .getByRole("toolbar", { name: "Artifact actions" })
+    .getByRole("button", { name: "Preview", exact: true })
     .click();
   await expect(liveFrame(page)).toBeVisible();
   return frameOf(page);
