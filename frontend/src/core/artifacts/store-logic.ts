@@ -201,6 +201,7 @@ export function lineageWords(
 ): string | null {
   if (lineage === "user") return null;
   if (isImported(lineage, source)) return "Imported from its chat";
+  if (!namedSource(source)) return "Origin not determined";
   const named = namedSource(source);
   return named
     ? `Made from content the assistant read (${named})`
@@ -357,7 +358,8 @@ function namedSource(source: string | null | undefined): string {
 
 /** The viewer's source chip. NEUTRAL unless the version came from content
  * the assistant read AND its kind can run code (html, react, webapp): only
- * then is it the warning-styled "From content the assistant read". The
+ * then is it warning-styled. Unknown origin remains a warning for executable
+ * kinds, but never claims that the assistant read outside content. The
  * origin itself is the gateway's; this only words it. */
 export function sourceChip(
   kind: ArtifactKind,
@@ -372,6 +374,8 @@ export function sourceChip(
   const named = namedSource(source);
   const tail = named ? ` (${named})` : "";
   const runs = kind === "html" || kind === "react" || kind === "webapp";
+  if (!named)
+    return { label: "Origin not determined", tone: runs ? "warn" : "neutral" };
   return runs
     ? { label: `From content the assistant read${tail}`, tone: "warn" }
     : { label: `Made from what the assistant read${tail}`, tone: "neutral" };

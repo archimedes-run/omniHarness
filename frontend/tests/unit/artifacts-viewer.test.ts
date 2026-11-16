@@ -45,7 +45,7 @@ describe("source chip", () => {
       "file",
     ] as const) {
       expect(sourceChip(kind, "content", null)).toEqual({
-        label: "Made from what the assistant read",
+        label: "Origin not determined",
         tone: "neutral",
       });
     }
@@ -54,11 +54,10 @@ describe("source chip", () => {
   it("never prints (unknown) or an empty parenthetical", () => {
     for (const source of [null, "", "unknown", "Unknown", " ​"]) {
       const chip = sourceChip("react", "content", source);
-      expect(chip.label).toBe("From content the assistant read");
+      expect(chip.label).toBe("Origin not determined");
+      expect(chip.tone).toBe("warn");
       expect(chip.label).not.toMatch(/\(/);
-      expect(lineageWords("content", source)).toBe(
-        "Made from content the assistant read",
-      );
+      expect(lineageWords("content", source)).toBe("Origin not determined");
     }
   });
 
