@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { demoApp, installFakeBridge } from "./apps/fake-bridge";
 import { lowContrastText } from "./contrast-probe";
 
 /**
@@ -514,14 +515,63 @@ for (const scheme of ["light", "dark"] as const) {
         page.getByRole("dialog", { name: "Artifact", exact: true }),
       ).toHaveCount(0);
       await expect(appLink).toBeVisible();
-      await page.route("**/workspace/apps/today", (route) =>
-        route.fulfill({
-          contentType: "text/html",
-          body: "<h1>Registered app destination</h1>",
-        }),
-      );
-      await appLink.click();
-      await expect(page).toHaveURL(/\/workspace\/apps\/today$/);
+      await installFakeBridge(page, { apps: [demoApp({ version: 5 })] });
+      for (const action of ["primary", "evidence", "preview"]) {
+        await card.getByTestId("code-job-open-app").click();
+        await expect(
+          page
+            .frameLocator("iframe")
+            .first()
+            .getByRole("button", { name: "count is 0" }),
+        ).toBeVisible();
+        if (action !== "preview") {
+          await page
+            .getByRole("toolbar", { name: "Artifact actions" })
+            .getByRole("button", { name: "Close", exact: true })
+            .click();
+        }
+        const link =
+          action === "preview"
+            ? page.getByRole("link", { name: "Open the real app" })
+            : action === "evidence"
+              ? card.getByRole("link", { name: "Open", exact: true })
+              : appLink;
+        // App frames require the Apps document's path-scoped CSP. A client
+        // transition keeps the chat document's CSP and blocks the app frame.
+        const [response] = await Promise.all([
+          page.waitForResponse(
+            (r) =>
+              r.request().isNavigationRequest() &&
+              r.request().frame() === page.mainFrame() &&
+              new URL(r.url()).pathname === "/workspace/apps/today",
+            { timeout: 10000 },
+          ),
+          link.click(),
+        ]);
+        const host = new URL(page.url()).host;
+        expect(response.headers()["content-security-policy"]).toContain(
+          `frame-src http://${host}/api/apps/;`,
+        );
+        const frame = page.frameLocator('[data-testid="app-frame"]');
+        await expect(frame.locator("body")).toHaveAttribute(
+          "data-rendered",
+          "all",
+        );
+        await expect(page.locator('[data-testid="app-frame"]')).toHaveAttribute(
+          "sandbox",
+          "allow-scripts",
+        );
+        await page.goBack({ waitUntil: "networkidle" });
+        await expect(page).toHaveURL(new RegExp(`/workspace/chats/${THREAD}$`));
+        await expect(card).toBeVisible();
+      }
+      await card.getByTestId("code-job-open-app").click();
+      await expect(
+        page
+          .frameLocator("iframe")
+          .first()
+          .getByRole("button", { name: "count is 0" }),
+      ).toBeVisible();
     });
 
     test("a registered app still opens when no build preview was published", async ({
