@@ -528,13 +528,13 @@ test.describe("the source chip", () => {
     [
       "content, unknown source",
       { lineage: "content", lineage_source: "unknown" },
-      "From content the assistant read",
+      "Origin not determined",
       "warn",
     ],
     [
       "content, empty source",
       { lineage: "content", lineage_source: null },
-      "From content the assistant read",
+      "Origin not determined",
       "warn",
     ],
   ];
