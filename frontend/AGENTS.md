@@ -69,6 +69,12 @@ src/
 └── styles/                 # Global styles
 ```
 
+### Artifact viewers
+
+Registered coding jobs link **Open the app** to `/workspace/apps/{app_id}`. The published build remains a separate sample-data preview when the job includes app checks or registration. Preview metadata is scoped to the chat; generic files are not labelled as sample data.
+
+File previews and saved artifacts share `ViewerHeader`, accessible icon controls, preview sizes, and the mobile `ArtifactOverlay`. Keep their renderers separate: file/live-preview frame links and stored artifact frames retain their existing sandbox rules. Regression coverage lives in `tests/rendering/code-job.spec.ts`, `artifacts-viewer.spec.ts`, and `live-preview.spec.ts`.
+
 ### Technology Stack
 
 - **LangGraph SDK** (`@langchain/langgraph-sdk@1.5.3`) - Agent orchestration and streaming

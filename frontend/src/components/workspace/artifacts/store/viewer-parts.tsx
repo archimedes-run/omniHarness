@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type HTMLAttributes,
 } from "react";
 
 import { useOptionalPromptInputController } from "@/components/ai-elements/prompt-input";
@@ -41,6 +42,21 @@ import { cn } from "@/lib/utils";
  * with a tooltip on hover AND keyboard focus (never on touch), the checks
  * and source chips, the preview size toggles and the docked ask box.
  */
+
+export function ViewerHeader({
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement>) {
+  return (
+    <header
+      className={cn(
+        "border-border flex min-h-[60px] min-w-0 shrink-0 items-center gap-1.5 border-b pr-3.5 pl-5 max-sm:pr-2 max-sm:pl-3",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
 
 /** 34 px icon buttons (44 px on a touch screen), a visible focus ring. */
 export function iconButtonClass(

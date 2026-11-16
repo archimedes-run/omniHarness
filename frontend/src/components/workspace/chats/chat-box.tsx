@@ -138,7 +138,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     return artifactsOpen;
   }, [artifactsOpen, artifacts]);
 
-  const viewerOpen = storeSelection !== null;
+  const viewerOpen = selectedArtifact !== null;
   const resizableIdBase = useMemo(() => {
     return pathname.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   }, [pathname]);
@@ -164,13 +164,23 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     />
   ) : null;
 
+  const viewerPanel =
+    storePanel ??
+    (selectedArtifact ? (
+      <ArtifactFileDetail
+        className="size-full"
+        filepath={selectedArtifact}
+        threadId={threadId}
+      />
+    ) : null);
+
   return (
     <>
-      {/* At phone width a store artifact opens over the chat, full screen
+      {/* At phone width an artifact opens over the chat, full screen
           (the split panel would be a sliver). */}
-      {isMobile && artifactPanelOpen && storePanel && (
+      {isMobile && artifactPanelOpen && viewerPanel && (
         <ArtifactOverlay onClose={() => setArtifactsOpen(false)}>
-          {storePanel}
+          {viewerPanel}
         </ArtifactOverlay>
       )}
       <ResizablePanelGroup
@@ -199,22 +209,16 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
           <div
             className={cn(
               "h-full transition-transform duration-300 ease-in-out",
-              storeSelection ? "p-0" : "p-4",
+              viewerPanel ? "p-0" : "p-4",
               artifactPanelOpen ? "translate-x-0" : "translate-x-full",
             )}
           >
-            {storeSelection ? (
+            {viewerPanel ? (
               isMobile ? null : (
                 <div className="border-border size-full overflow-hidden border-l">
-                  {storePanel}
+                  {viewerPanel}
                 </div>
               )
-            ) : selectedArtifact ? (
-              <ArtifactFileDetail
-                className="size-full"
-                filepath={selectedArtifact}
-                threadId={threadId}
-              />
             ) : (
               <div className="relative flex size-full justify-center">
                 <div className="absolute top-1 right-1 z-30">

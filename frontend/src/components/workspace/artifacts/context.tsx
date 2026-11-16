@@ -11,7 +11,16 @@ import {
 import { useSidebar } from "@/components/ui/sidebar";
 import { env } from "@/env";
 
+export interface BuildPreviewDetails {
+  threadId: string;
+  title: string;
+  sample: boolean;
+  appId?: string;
+}
+
 export interface ArtifactsContextType {
+  buildPreviews: Record<string, BuildPreviewDetails>;
+  registerBuildPreview: (path: string, details: BuildPreviewDetails) => void;
   artifacts: string[];
   setArtifacts: (artifacts: string[]) => void;
 
@@ -34,6 +43,19 @@ interface ArtifactsProviderProps {
 }
 
 export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
+  const [buildPreviews, setBuildPreviews] = useState<
+    Record<string, BuildPreviewDetails>
+  >({});
+  const registerBuildPreview = useCallback(
+    (path: string, details: BuildPreviewDetails) => {
+      setBuildPreviews((previous) => {
+        if (JSON.stringify(previous[path]) === JSON.stringify(details))
+          return previous;
+        return { ...previous, [path]: details };
+      });
+    },
+    [],
+  );
   const [artifacts, setArtifacts] = useState<string[]>([]);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [autoSelect, setAutoSelect] = useState(true);
@@ -76,6 +98,8 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     () => ({
       artifacts,
       setArtifacts,
+      buildPreviews,
+      registerBuildPreview,
       open,
       autoOpen,
       autoSelect,
@@ -87,6 +111,8 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     [
       artifacts,
       setArtifacts,
+      buildPreviews,
+      registerBuildPreview,
       open,
       autoOpen,
       autoSelect,
