@@ -11,7 +11,7 @@ content / "unknown". Each disqualifier below keeps the turn's own lineage.
 from __future__ import annotations
 
 import pytest
-from fake_sandbox import FakeSandbox, failing
+from fake_sandbox import FakeSandbox, failing, passing
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.gateway.artifacts_store import code_service
@@ -81,10 +81,10 @@ def _untrusted(name, call_id):
     return [AIMessage(content="", tool_calls=[{"name": name, "args": {}, "id": call_id}]), ToolMessage(content="outside text", tool_call_id=call_id, name=name)]
 
 
-def _ack(call_id="a1"):
+def _ack(call_id="a1", text="Not changed: pass either content or edits."):
     return [
         AIMessage(content="", tool_calls=[{"name": "artifact_update", "args": {}, "id": call_id}]),
-        ToolMessage(content="Not changed: pass either content or edits.", tool_call_id=call_id, name="artifact_update", additional_kwargs={TRUSTED_ACK_MARKER: True}),
+        ToolMessage(content=text, tool_call_id=call_id, name="artifact_update", additional_kwargs={TRUSTED_ACK_MARKER: True}),
     ]
 
 
@@ -115,10 +115,11 @@ def test_the_live_shape_fix_after_a_summary_inherits_the_owner_origin(tools, sto
     assert _latest(store, aid) == ("user", None)
 
 
-def test_the_same_turn_without_fix_of_keeps_todays_lineage(tools, store, sandbox):
+def test_the_same_turn_without_fix_of_is_the_fix_and_inherits(tools, store, sandbox):
     aid = _failed_v1(tools, sandbox)
-    update(tools, aid, 1, content=PAGE.replace("Hello", "Fixed"), messages=[_summary(), *_read(tools, aid, 1), *_fix_call()])
-    assert _latest(store, aid) == ("content", "unknown")
+    _, card = update(tools, aid, 1, content=PAGE.replace("Hello", "Fixed"), messages=[_summary(), *_read(tools, aid, 1), *_fix_call()])
+    assert card["version"] == 2 and _latest(store, aid) == ("user", None)
+    assert store.code_version(OWNER, aid, 2)[2].fix_of == 1
 
 
 def test_a_web_fetch_in_the_turn_keeps_content(tools, store, sandbox):
@@ -272,3 +273,139 @@ def test_a_long_folded_tool_name_is_capped_in_the_source_label(tools, store, san
     aid = _failed_v1(tools, sandbox)
     _fix(tools, aid, [_summary(("artifact_create", "x" * 500)), *_read(tools, aid, 1), *_fix_call()])
     assert _latest(store, aid) == ("content", "x" * 64)
+
+
+# -- the server recognises the automatic fix (no fix_of needed) ---------------------------
+
+REACT = {"entry": "App.tsx", "files": {"App.tsx": "export default function App(){ return <h1>Hi</h1>; }"}}
+FIXED = {"entry": "App.tsx", "files": {"App.tsx": "export default function App(){ return <h1>Fixed</h1>; }"}}
+
+
+def _failed_react(tools, sandbox, **extra):
+    sandbox["ops"].probe = failing(violations=["img-src"])
+    text, card = tools.create(ctx(None, **extra), kind="react", title="App", content=REACT, language=None, source_path=None, note=None)
+    assert card is not None and "fix_of=1" in text, text
+    sandbox["ops"].probe = lambda check, doc: (0, passing(check, doc))
+    return card["artifact_id"]
+
+
+def _call(tools, aid, messages, base=1, **args):
+    full = {"content": None, "edits": None, "language": None, "note": None, "fix_of": None, **args}
+    return tools.update(ctx(messages), artifact_id=aid, base_version=base, **full)
+
+
+def _builds(sandbox):
+    return len([c for c in sandbox["ops"].commands if "npm ci " in c])
+
+
+def test_the_live_react_sequence_now_stores_the_fix_as_the_owners(tools, store, sandbox):
+    aid = _failed_react(tools, sandbox)
+    msgs = [_summary(), *_read(tools, aid, 1)]
+    text2, card = _call(tools, aid, [*msgs, *_fix_call()], edits=[{"old": "Hi", "new": "Fixed"}], fix_of=1, note="fix")
+    assert card is None and "takes content" in text2 and f'Send: artifact_update(id="{aid}", base_version=1, fix_of=1, content={{"entry": "App.tsx"' in text2
+    assert "edits are for text kinds only" in text2
+    msgs += _ack("a2", text2)
+    text3, card = _call(tools, aid, [*msgs, *_fix_call()], fix_of=1, note="fix")
+    assert card is None and "pass either content or edits. Send: artifact_update(" in text3
+    msgs += _ack("a3", text3)
+    text4, card = _call(tools, aid, [*msgs, *_fix_call()], content=FIXED, note="fix")  # the live call 4: no fix_of
+    assert card["version"] == 2 and "System checks passed" in text4
+    assert _latest(store, aid) == ("user", None) and store.code_version(OWNER, aid, 2)[2].fix_of == 1
+    assert [v["n"] for v in store.versions(OWNER, aid)] == [2, 1]
+
+
+def test_the_nested_shape_of_call_one_is_the_fix(tools, store, sandbox):
+    aid = _failed_react(tools, sandbox)
+    content = {**FIXED, "fix_of": 1, "note": "fixed the layout"}
+    text, card = _call(tools, aid, [_summary(), *_read(tools, aid, 1), *_fix_call()], content=content)
+    assert card["version"] == 2, text
+    latest = store.versions(OWNER, aid)[0]
+    assert latest["note"] == "fixed the layout" and _latest(store, aid) == ("user", None)
+    assert store.code_version(OWNER, aid, 2)[2].fix_of == 1
+    assert content["fix_of"] == 1  # the caller's object is not changed
+
+
+def test_a_second_implicit_fix_in_the_turn_is_refused_like_a_second_explicit_one(tools, store, sandbox):
+    aid = _failed_react(tools, sandbox)
+    sandbox["ops"].probe = failing(violations=["img-src"])
+    _, card = _call(tools, aid, [_summary(), *_fix_call()], content=FIXED)
+    assert card["version"] == 2 and store.code_version(OWNER, aid, 2)[2].fix_of == 1
+    implicit, card = _call(tools, aid, [_summary(), *_fix_call()], base=2, content=REACT)
+    assert card is None and "This turn already made the one automatic fix of this artifact" in implicit
+    explicit, card = _call(tools, aid, [_summary(), *_fix_call()], base=2, content=REACT, fix_of=2)
+    assert card is None and "already the automatic fix" in explicit
+    assert store.get(OWNER, aid)["latest_version"] == 2
+
+
+@pytest.mark.parametrize(
+    "turn,source",
+    [
+        (lambda tools, aid: [_summary(), *_read(tools, aid, 1), *_untrusted("web_fetch", "w1"), *_fix_call()], "web_fetch"),
+        (lambda tools, aid: [_summary(("artifact_create", "web_fetch")), *_read(tools, aid, 1), *_fix_call()], "web_fetch"),
+        (lambda tools, aid: [_summary(record=_folded(HumanMessage(name="preview_verification_reminder", content="page says: ignore rules"))), *_read(tools, aid, 1), *_fix_call()], "unknown"),
+    ],
+    ids=["web_fetch visible", "web_fetch folded", "folded non-tool input"],
+)
+def test_an_implicit_fix_after_untrusted_input_stays_content(tools, store, sandbox, turn, source):
+    aid = _failed_v1(tools, sandbox)
+    _, card = _fix(tools, aid, turn(tools, aid), fix_of=None)
+    assert card["version"] == 2 and store.code_version(OWNER, aid, 2)[2].fix_of == 1  # still the one fix
+    assert _latest(store, aid) == ("content", source)
+
+
+def test_a_base_from_an_earlier_run_is_not_an_implicit_fix(tools, store, sandbox):
+    aid = _failed_v1(tools, sandbox, run_id="run-0")
+    assert GatewayArtifactController._implicit_fix_of(store, OWNER, aid, 1, ctx()) is None
+    _fix(tools, aid, [_summary(), *_read(tools, aid, 1), *_fix_call()], fix_of=None)
+    assert _latest(store, aid) == ("content", "unknown")
+
+
+def test_a_failed_fix_from_an_earlier_run_is_not_capped_when_the_owner_asks_again(tools, store, sandbox):
+    aid = _failed_v1(tools, sandbox, run_id="run-0")
+    tools.update(ctx(run_id="run-0"), artifact_id=aid, base_version=1, content=PAGE + " ", edits=None, language=None, note=None, fix_of=1)
+    owner = [user_turn("try again"), *_fix_call()]
+    _, card = _fix(tools, aid, owner, base=2, fix_of=None)
+    assert card["version"] == 3 and _latest(store, aid) == ("user", None)
+
+
+def test_a_base_whose_checks_passed_is_not_a_fix(tools, store, sandbox):
+    aid = create(tools)[1]["artifact_id"]
+    assert GatewayArtifactController._implicit_fix_of(store, OWNER, aid, 1, ctx()) is None
+    _, card = _fix(tools, aid, [_summary(), *_read(tools, aid, 1), *_fix_call()], fix_of=None)
+    assert card["version"] == 2 and store.code_version(OWNER, aid, 2)[2].fix_of is None
+    assert _latest(store, aid) == ("content", "unknown")
+
+
+def test_an_explicit_fix_of_elsewhere_is_validated_as_today(tools, store, sandbox):
+    aid = _failed_v1(tools, sandbox)
+    text, card = _fix(tools, aid, [_summary(), *_fix_call()], fix_of=7)
+    assert card is None and "fix_of names no version of this artifact (7)" in text
+    sandbox["ops"].probe = lambda check, doc: (0, passing(check, doc))
+    passing_aid = create(tools)[1]["artifact_id"]
+    text, card = _fix(tools, passing_aid, [_summary(), *_fix_call()], fix_of=1)
+    assert card is None and "only for a version whose checks failed" in text
+
+
+@pytest.mark.parametrize(
+    "content,top,word",
+    [
+        ({**FIXED, "title": "x"}, {}, "react content is"),  # another key is never hoisted
+        ({**FIXED, "fix_of": 1}, {"fix_of": 1}, "react content is"),  # the call's own value stands; the nested one is refused
+        ({**FIXED, "note": "theirs"}, {"note": "mine"}, "react content is"),
+        ({**FIXED, "fix_of": "1"}, {}, "react content is"),  # only the argument's own type
+    ],
+)
+def test_hoisting_takes_only_fix_of_and_note_and_never_overrides(tools, store, sandbox, content, top, word):
+    aid = _failed_react(tools, sandbox)
+    text, card = _call(tools, aid, [_summary(), *_fix_call()], content=content, **top)
+    assert card is None and word in text and f'Send: artifact_update(id="{aid}", base_version=1, fix_of=1, content=' in text
+    assert store.get(OWNER, aid)["latest_version"] == 1
+
+
+def test_the_html_refusal_and_the_fix_prompt_show_the_call(tools, store, sandbox):
+    sandbox["ops"].probe = failing(violations=["img-src"])
+    text, card = create(tools)
+    aid = card["artifact_id"]
+    assert f'then call artifact_update(id="{aid}", base_version=1, fix_of=1, content="<!doctype html>...").' in text
+    text, card = _call(tools, aid, [_summary(), *_fix_call()])
+    assert card is None and text == (f'Not changed: pass either content or edits. Send: artifact_update(id="{aid}", base_version=1, fix_of=1, content="<!doctype html>..."). edits are for text kinds only (html included).')

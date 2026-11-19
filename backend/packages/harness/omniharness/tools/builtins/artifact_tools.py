@@ -102,8 +102,10 @@ def artifact_create_tool(
         '[{"old":"text that occurs exactly once","new":"its replacement"}] for markdown, code, mermaid or svg. '
         "Refused if the artifact changed since base_version (read it again), if it is archived, or if the kind would "
         "change. `note`: one short line on what changed. html takes content or edits; react takes the whole "
-        "{entry, files} content. `fix_of`: ONLY when a result asks for the one automatic fix of a code artifact "
-        "whose checks failed: the version number it fixes. Leave empty otherwise."
+        "{entry, files} content, never edits. The one automatic fix a result asks for (n = the failed version): "
+        'react: artifact_update(id=..., base_version=n, fix_of=n, content={"entry":"App.tsx","files":{"App.tsx":"..."}}); '
+        'html: artifact_update(id=..., base_version=n, fix_of=n, content="<!doctype html>..."). '
+        "fix_of and note go beside content, never inside it. Leave fix_of empty otherwise."
     ),
 )
 def artifact_update_tool(
