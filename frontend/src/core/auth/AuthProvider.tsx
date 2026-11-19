@@ -10,6 +10,8 @@ import React, {
   type ReactNode,
 } from "react";
 
+import { navigateWorkspace } from "@/core/security/document-navigation";
+
 import { type User, buildLoginUrl } from "./types";
 
 // Re-export for consumers
@@ -68,7 +70,9 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
         setUser(null);
         // Redirect to login if on a protected route
         if (pathname?.startsWith("/workspace")) {
-          router.push(buildLoginUrl(pathname));
+          navigateWorkspace(buildLoginUrl(pathname), (path) =>
+            router.push(path),
+          );
         }
       }
     } catch (err) {
@@ -98,7 +102,7 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
     }
 
     // Redirect to home page
-    router.push("/");
+    navigateWorkspace("/", (path) => router.push(path));
   }, [router]);
 
   /**
@@ -157,7 +161,9 @@ export function useRequireAuth(): AuthContextType {
   useEffect(() => {
     // Only redirect if we're sure user is not authenticated (not just loading)
     if (!auth.isLoading && !auth.isAuthenticated) {
-      router.push(buildLoginUrl(pathname || "/workspace"));
+      navigateWorkspace(buildLoginUrl(pathname || "/workspace"), (path) =>
+        router.push(path),
+      );
     }
   }, [auth.isAuthenticated, auth.isLoading, router, pathname]);
 
