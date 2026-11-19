@@ -104,6 +104,14 @@ export function artifactDisplayName(
   manifests: ArtifactManifest[],
   fallbackName: (path: string) => string,
 ) {
+  if (value.startsWith("write-file:")) {
+    // A step's written file: name it by its path, not the step's query.
+    try {
+      return fallbackName(decodeURIComponent(new URL(value).pathname));
+    } catch {
+      return fallbackName(value);
+    }
+  }
   const manifestId = parseArtifactManifestValue(value);
   if (!manifestId) {
     return fallbackName(value);

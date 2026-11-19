@@ -34,6 +34,7 @@ import {
 import { openNewAgentPanel } from "@/components/workspace/studio/url-item";
 import { useI18n } from "@/core/i18n/hooks";
 import { saveAppearance, type Appearance } from "@/core/preferences";
+import { navigateWorkspace } from "@/core/security/document-navigation";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
 import { PaletteResults, matches } from "./palette-results";
@@ -88,7 +89,7 @@ export function CommandPalette() {
   const go = useCallback(
     (href: string) => {
       close();
-      router.push(href);
+      navigateWorkspace(href, (path) => router.push(path));
     },
     [close, router],
   );

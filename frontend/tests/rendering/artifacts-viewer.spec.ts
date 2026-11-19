@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { installFakeBridge } from "./apps/fake-bridge";
 import { installCodeStore, THREAD, type CodeRec } from "./artifacts/fake-code";
 import { IDS, installFakeStore, SAVED_IDS } from "./artifacts/fake-store";
 import { lowContrastText } from "./contrast-probe";
@@ -870,3 +871,66 @@ test.describe("phone width", () => {
     });
   }
 });
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`crossing Apps and Artifacts loads the destination document policy (${scheme})`, async ({
+    page,
+  }) => {
+    await theme(page, scheme);
+    await installFakeBridge(page, { pins: ["today"] });
+    await installCodeStore(page, [budget()]);
+    await page.goto("/workspace/apps/today");
+    const appReady = async () => {
+      await expect(
+        page.frameLocator('[data-testid="app-frame"]').locator("body"),
+      ).toHaveAttribute("data-rendered", "all");
+      await expect(page.getByTestId("app-frame")).toHaveAttribute(
+        "sandbox",
+        "allow-scripts",
+      );
+    };
+    await appReady();
+    const navigate = async (link: Locator, apps: boolean) => {
+      const response = page.waitForResponse(
+        (r) =>
+          r.request().isNavigationRequest() &&
+          r.request().frame() === page.mainFrame(),
+      );
+      await link.click();
+      const csp = (await response).headers()["content-security-policy"]!;
+      const frameSrc = /frame-src ([^;]*)/.exec(csp)![1]!;
+      expect(frameSrc.includes("/api/apps/")).toBe(apps);
+      expect(frameSrc.includes("/api/artifacts/")).toBe(!apps);
+    };
+    await navigate(
+      page.getByRole("link", { name: "Artifacts", exact: true }),
+      false,
+    );
+    await page
+      .getByRole("link", { name: "Budget Tracker", exact: true })
+      .click();
+    await expect(
+      page
+        .frameLocator('[data-testid="artifact-frame"]')
+        .getByText("Spending by category", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("artifact-frame")).toHaveAttribute(
+      "sandbox",
+      "allow-scripts",
+    );
+    await navigate(page.getByTestId("pinned-app"), true);
+    await appReady();
+    await navigate(
+      page.getByRole("link", { name: "Artifacts", exact: true }),
+      false,
+    );
+    await page
+      .getByRole("link", { name: "Budget Tracker", exact: true })
+      .click();
+    await expect(
+      page
+        .frameLocator('[data-testid="artifact-frame"]')
+        .getByText("Spending by category", { exact: true }),
+    ).toBeVisible();
+  });
+}

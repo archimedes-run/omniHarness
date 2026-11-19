@@ -14,6 +14,7 @@ import {
 } from "@/core/apps/api";
 import { AppHostController } from "@/core/apps/host-controller";
 import type { SourceResult, Theme } from "@/core/apps/protocol";
+import { navigateWorkspace } from "@/core/security/document-navigation";
 
 /** FR-017: exactly this, nothing more. */
 export const APP_FRAME_SANDBOX = "allow-scripts";
@@ -114,7 +115,8 @@ export function AppFrame({
       openExternal: (url) => {
         window.open(url, "_blank", "noopener,noreferrer");
       },
-      openInternal: (path) => router.push(path),
+      openInternal: (path) =>
+        navigateWorkspace(path, (href) => router.push(href)),
       onConnect: (source) => onConnectRef.current(source),
       onTornDown: () => {
         frame.remove();

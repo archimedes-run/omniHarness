@@ -45,6 +45,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useI18n } from "@/core/i18n/hooks";
+import { navigateWorkspace } from "@/core/security/document-navigation";
 import {
   exportThreadAsJSON,
   exportThreadAsMarkdown,
@@ -105,7 +106,7 @@ export function RecentChatList() {
             nextThreadPath = pathOfThread(threads[threadIndex - 1]!);
           }
         }
-        void router.push(nextThreadPath);
+        navigateWorkspace(nextThreadPath, (path) => router.push(path));
       }
     },
     [agentNameFromPath, deleteThread, router, threadIdFromPath, threads],

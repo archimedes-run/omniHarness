@@ -69,6 +69,10 @@ src/
 └── styles/                 # Global styles
 ```
 
+### Document navigation
+
+Apps and other workspace pages have distinct document CSPs. `DocumentNavigation` forces a document load for same-tab links crossing that boundary in either direction, including shared sidebar and portal links. Programmatic workspace navigation uses `navigateWorkspace`. Never broaden frame-src to make client navigation work.
+
 ### Artifact viewers
 
 Registered coding jobs link **Open the app** to `/workspace/apps/{app_id}` with native anchors. Chat-to-app navigation must load a new document: client-side transitions retain the chat CSP, which cannot frame `/api/apps/`. The published build remains a separate sample-data preview when the job includes app checks or registration. Preview metadata is scoped to the chat; generic files are not labelled as sample data.

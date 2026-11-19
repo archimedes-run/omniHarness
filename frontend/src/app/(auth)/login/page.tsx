@@ -9,40 +9,12 @@ import { Button } from "@/components/ui/button";
 import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
+import {
+  DEFAULT_LOGIN_LANDING,
+  validateNextParam,
+} from "@/core/auth/next-param";
 import { parseAuthError } from "@/core/auth/types";
-
-/**
- * Validate next parameter
- * Prevent open redirect attacks
- * Per RFC-001: Only allow relative paths starting with /
- */
-function validateNextParam(next: string | null): string | null {
-  if (!next) {
-    return null;
-  }
-
-  // Need start with / (relative path)
-  if (!next.startsWith("/")) {
-    return null;
-  }
-
-  // Disallow protocol-relative URLs
-  if (
-    next.startsWith("//") ||
-    next.startsWith("http://") ||
-    next.startsWith("https://")
-  ) {
-    return null;
-  }
-
-  // Disallow URLs with different protocols (e.g., javascript:, data:, etc)
-  if (next.includes(":") && !next.startsWith("/")) {
-    return null;
-  }
-
-  // Valid relative path
-  return next;
-}
+import { navigateWorkspace } from "@/core/security/document-navigation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -58,12 +30,18 @@ export default function LoginPage() {
 
   // Get next parameter for validated redirect
   const nextParam = searchParams.get("next");
-  const redirectPath = validateNextParam(nextParam) ?? "/workspace";
+  const redirectPath =
+    validateNextParam(
+      nextParam,
+      typeof window === "undefined"
+        ? "http://localhost"
+        : window.location.origin,
+    ) ?? DEFAULT_LOGIN_LANDING;
 
   // Redirect if already authenticated (client-side, post-login)
   useEffect(() => {
     if (isAuthenticated) {
-      router.push(redirectPath);
+      navigateWorkspace(redirectPath, (path) => router.push(path));
     }
   }, [isAuthenticated, redirectPath, router]);
 
@@ -119,7 +97,7 @@ export default function LoginPage() {
       }
 
       // Both login and register set a cookie — redirect to workspace
-      router.push(redirectPath);
+      navigateWorkspace(redirectPath, (path) => router.push(path));
     } catch {
       setError("Network error. Please try again.");
     } finally {

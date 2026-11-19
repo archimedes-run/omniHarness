@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 
 import { QueryClientProvider } from "@/components/query-client-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { DocumentNavigation } from "@/components/workspace/document-navigation";
 import { Capsule } from "@/components/workspace/shell/capsule";
 import { CommandPalette } from "@/components/workspace/shell/command-palette";
 import { PanelSheet } from "@/components/workspace/shell/panel-sheet";
@@ -29,6 +30,7 @@ export async function WorkspaceContent({
     <QueryClientProvider>
       <SidebarProvider className="h-screen" defaultOpen={initialSidebarOpen}>
         <ShellProvider>
+          <DocumentNavigation />
           <WorkspaceSidebar />
           <SidebarInset className="h-screen min-w-0 overflow-hidden">
             <Capsule />
