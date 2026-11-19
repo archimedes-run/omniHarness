@@ -327,3 +327,87 @@ test("a fresh frame link reaches the running app without reloading it", async ({
     );
   }
 });
+
+test("while a preview is being created the status says starting, not not running", async ({
+  page,
+}) => {
+  await setup(page, ["probe"]);
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  // No session yet; creating one is held open until the assertion is made.
+  await page.route(`**/api/threads/${THREAD}/previews`, (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route(
+    `**/api/threads/${THREAD}/artifacts/manifests/*/preview`,
+    async (route) => {
+      await held;
+      return route.fulfill({ status: 500, json: { detail: "stopped" } });
+    },
+  );
+  await page.goto(`/workspace/chats/${THREAD}`, { waitUntil: "networkidle" });
+  await page
+    .locator('[data-slot="card"]', {
+      has: page.getByText("Live probe", { exact: true }),
+    })
+    .first()
+    .click();
+  const info = page.getByTestId("file-preview-info");
+  await expect(info).toContainText("Live development preview · not running");
+  await page
+    .getByRole("toolbar", { name: "Artifact actions" })
+    .getByRole("button", { name: "Preview", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Start Preview", exact: true })
+    .click();
+  await expect(info).toContainText("Live development preview · starting");
+  release();
+});
+
+test("installing a skill shows its tooltip and a spinner until it finishes", async ({
+  page,
+}) => {
+  await installThread(page);
+  const state = threadState();
+  (state.values.messages as unknown[]).push({
+    type: "ai",
+    id: "as",
+    content: "Here is the skill.",
+    tool_calls: [
+      {
+        id: "ps",
+        name: "present_files",
+        args: { filepaths: ["/mnt/user-data/outputs/demo.skill"] },
+      },
+    ],
+  });
+  await page.route("**/api/langgraph/**", (route) => {
+    const url = route.request().url();
+    if (url.includes("/history")) return route.fulfill({ json: [state] });
+    if (url.includes("/runs") || url.includes("/search"))
+      return route.fulfill({ json: [] });
+    return route.fulfill({ json: state });
+  });
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/skills/install", async (route) => {
+    await held;
+    return route.fulfill({ json: { success: true, message: "Installed" } });
+  });
+  await page.goto(`/workspace/chats/${THREAD}`, { waitUntil: "networkidle" });
+  await page.getByText("demo.skill", { exact: true }).first().click();
+  const install = page
+    .getByTestId("file-viewer-header")
+    .getByRole("button", { name: "Install", exact: true });
+  await install.hover();
+  await expect(
+    page.getByText("Install skill and make it available to OmniHarness"),
+  ).toBeVisible();
+  await expect(install.getByTestId("installing")).toHaveCount(0);
+  await install.click();
+  await expect(install).toBeDisabled();
+  await expect(install.getByTestId("installing")).toBeVisible();
+  release();
+  await expect(install.getByTestId("installing")).toHaveCount(0);
+});

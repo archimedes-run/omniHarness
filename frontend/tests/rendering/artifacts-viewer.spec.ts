@@ -1,8 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Frame,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
+import { installFakeBridge } from "./apps/fake-bridge";
 import { installCodeStore, THREAD, type CodeRec } from "./artifacts/fake-code";
 import { IDS, installFakeStore, SAVED_IDS } from "./artifacts/fake-store";
 import { lowContrastText } from "./contrast-probe";
@@ -84,8 +91,22 @@ function budget(over: Partial<CodeRec> = {}): CodeRec {
   };
 }
 
-/** The board's chat: one request, the reply and its card. */
-async function installChat(page: Page, rec: CodeRec) {
+/** The board's chat: one request, the reply and its card (and, with
+ * `more`, further cards after it). */
+async function installChat(page: Page, rec: CodeRec, more: CodeRec[] = []) {
+  const extra = more.map((r, i) => ({
+    type: "tool",
+    id: `t-x${i}`,
+    name: "artifact_create",
+    tool_call_id: `cx${i}`,
+    content: `Created ${r.kind} artifact ${r.id}.`,
+    artifact: {
+      type: "omni_artifact",
+      artifact_id: r.id,
+      version: r.history?.length ?? 1,
+      kind: r.kind,
+    },
+  }));
   const messages = [
     {
       type: "human",
@@ -99,6 +120,11 @@ async function installChat(page: Page, rec: CodeRec) {
       content: "",
       tool_calls: [
         { id: "c1", name: "artifact_create", args: { kind: rec.kind } },
+        ...more.map((r, i) => ({
+          id: `cx${i}`,
+          name: "artifact_create",
+          args: { kind: r.kind },
+        })),
       ],
     },
     {
@@ -114,6 +140,7 @@ async function installChat(page: Page, rec: CodeRec) {
         kind: rec.kind,
       },
     },
+    ...extra,
     {
       type: "ai",
       id: "a-1",
@@ -268,6 +295,7 @@ test.describe("the board: a react app in the chat's side panel", () => {
         "Pin to sidebar",
         "Open the chat that made it",
         "More actions",
+        t === "dark" ? "Switch to light theme" : "Switch to dark theme",
         "Full screen",
         "Close",
       ]);
@@ -342,6 +370,7 @@ test.describe("the board: a react app in the chat's side panel", () => {
       );
       await expect(panel.getByTestId("artifact-react-files")).toBeVisible();
       await expect(panel.getByTestId("artifact-devices")).toHaveCount(0);
+      await expect(panel.getByTestId("artifact-preview-theme")).toHaveCount(0);
       await page.mouse.move(0, 0);
       await shot(page, `board-code-${t}`);
       await aa(page);
@@ -393,6 +422,285 @@ test.describe("icon buttons", () => {
   });
 });
 
+/** Inside each artifact frame: records what the host sends (the init
+ * message and every message on its port), read back with `hostMessages`. */
+async function recordHostMessages(page: Page) {
+  await page.addInitScript(() => {
+    if (window.top === window) return;
+    const log: unknown[] = [];
+    (window as unknown as { __host: unknown[] }).__host = log;
+    window.addEventListener(
+      "message",
+      (e) => {
+        const d = e.data as { type?: string } | null;
+        if (d?.type === "init") log.push(d);
+      },
+      true,
+    );
+    const desc = Object.getOwnPropertyDescriptor(
+      MessagePort.prototype,
+      "onmessage",
+    )!;
+    Object.defineProperty(MessagePort.prototype, "onmessage", {
+      configurable: true,
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      get: desc.get,
+      set(fn: ((e: MessageEvent) => void) | null) {
+        desc.set!.call(
+          this,
+          fn &&
+            function (this: MessagePort, e: MessageEvent) {
+              log.push(e.data);
+              return fn.call(this, e);
+            },
+        );
+      },
+    });
+  });
+}
+
+async function panelFrame(panel: Locator) {
+  const el = panel.getByTestId("artifact-frame");
+  await expect(el).toBeVisible({ timeout: 15_000 });
+  return (await (await el.elementHandle())!.contentFrame())!;
+}
+
+type Host = { type: string; theme?: string; vars?: Record<string, string> };
+const hostMessages = (frame: Frame) =>
+  frame.evaluate(() => (window as unknown as { __host: Host[] }).__host);
+
+/** The app's tokens for a theme, as the frame host reads them. */
+const TOKENS = [
+  "--background",
+  "--foreground",
+  "--card",
+  "--card-foreground",
+  "--primary",
+  "--primary-foreground",
+  "--muted",
+  "--muted-foreground",
+  "--accent",
+  "--accent-foreground",
+  "--destructive",
+  "--border",
+  "--ring",
+];
+function appTokens(page: Page, cls: "root" | "light" | "dark") {
+  return page.evaluate(
+    ([names, c]) => {
+      let el: HTMLElement = document.documentElement;
+      if (c !== "root") {
+        el = document.createElement("div");
+        el.className = c;
+        document.body.appendChild(el);
+      }
+      const st = getComputedStyle(el);
+      const out: Record<string, string> = {};
+      for (const n of names) {
+        const v = st.getPropertyValue(n).trim();
+        if (v) out[n] = v;
+      }
+      if (c !== "root") el.remove();
+      return out;
+    },
+    [TOKENS, cls] as const,
+  );
+}
+
+const frameIsDark = (frame: Frame) =>
+  frame.evaluate(() => document.documentElement.classList.contains("dark"));
+const frameBackground = (frame: Frame) =>
+  frame.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--background")
+      .trim(),
+  );
+const appState = (page: Page) =>
+  page.evaluate(() => ({
+    cls: document.documentElement.className,
+    stored: localStorage.getItem("theme"),
+  }));
+
+test.describe("the preview theme", () => {
+  test("by default the frame is exactly as before; the button flips only the preview", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await theme(page, "dark");
+    await recordHostMessages(page);
+    const rec = budget();
+    const log = await installCodeStore(page, [rec]);
+    await installChat(page, rec);
+    const panel = await openInChat(page, rec);
+    const iframe = panel.getByTestId("artifact-frame");
+    const frame = await panelFrame(panel);
+
+    // Default: the attributes, src shape and messages of the app's theme.
+    await expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+    const src = (await iframe.getAttribute("src"))!;
+    expect(src).toMatch(
+      new RegExp(
+        `^/api/artifacts/${APP}/versions/2/frame\\.html\\?t=tok-${APP}#n=[A-Za-z0-9_-]{22}&t=dark$`,
+      ),
+    );
+    // The handshake (the fragment alone already paints the theme).
+    await expect
+      .poll(async () => (await hostMessages(frame)).length)
+      .toBeGreaterThan(0);
+    await expect.poll(() => frameIsDark(frame)).toBe(true);
+    const rootVars = await appTokens(page, "root");
+    expect(Object.keys(rootVars)).toHaveLength(TOKENS.length);
+    const before = await hostMessages(frame);
+    expect(before[0]).toEqual({
+      v: 1,
+      type: "init",
+      theme: "dark",
+      vars: rootVars,
+    });
+    for (const m of before.slice(1))
+      expect(m).toEqual({ v: 1, type: "theme", theme: "dark", vars: rootVars });
+    const loads = log.frames.length;
+    const app = await appState(page);
+    expect(app.cls).toContain("dark");
+
+    // The button: before Full screen, "Switch to light theme", a sun.
+    const button = panel.getByTestId("artifact-preview-theme");
+    await expect(button).toHaveAttribute("aria-label", "Switch to light theme");
+    await expect(button.locator("svg")).toHaveClass(/lucide-sun/);
+    const names = await headerNames(panel);
+    expect(names.slice(-3)).toEqual([
+      "Switch to light theme",
+      "Full screen",
+      "Close",
+    ]);
+    await page.mouse.move(0, 0);
+    await shot(page, "theme-react-dark-1440");
+    await button.click();
+
+    // The frame gets the light theme and the light tokens...
+    const light = await appTokens(page, "light");
+    await expect.poll(() => frameIsDark(frame)).toBe(false);
+    await expect.poll(() => frameBackground(frame)).toBe(light["--background"]);
+    expect((await hostMessages(frame)).at(-1)).toEqual({
+      v: 1,
+      type: "theme",
+      theme: "light",
+      vars: light,
+    });
+    await expect(button).toHaveAttribute("aria-label", "Switch to dark theme");
+    await expect(button.locator("svg")).toHaveClass(/lucide-moon/);
+    // ...the app keeps its own, and the frame is not reloaded.
+    expect(await appState(page)).toEqual(app);
+    expect(await iframe.getAttribute("src")).toBe(src);
+    expect(log.frames.length).toBe(loads);
+    await page.mouse.move(0, 0);
+    await shot(page, "theme-react-light-1440");
+    await aa(page);
+
+    // And back.
+    await button.click();
+    await expect.poll(() => frameIsDark(frame)).toBe(true);
+    expect((await hostMessages(frame)).at(-1)).toEqual({
+      v: 1,
+      type: "theme",
+      theme: "dark",
+      vars: await appTokens(page, "dark"),
+    });
+    expect(await appState(page)).toEqual(app);
+  });
+
+  test("a tooltip on keyboard focus, a focus ring; hidden in Code", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    const rec = budget();
+    await installCodeStore(page, [rec]);
+    await installChat(page, rec);
+    const panel = await openInChat(page, rec);
+    await panel.getByTestId("artifact-more").focus();
+    await page.keyboard.press("Tab");
+    const button = panel.getByTestId("artifact-preview-theme");
+    await expect(button).toBeFocused();
+    await expectTip(page, "Switch to dark theme");
+    expect(await button.evaluate((e) => getComputedStyle(e).outlineStyle)).toBe(
+      "solid",
+    );
+    const box = (await button.boundingBox())!;
+    expect(Math.round(box.width)).toBe(34);
+    expect(Math.round(box.height)).toBe(34);
+    await panel.getByTestId("artifact-tab-code").click();
+    await expect(button).toHaveCount(0);
+    await panel.getByTestId("artifact-tab-preview").click();
+    await expect(button).toBeVisible();
+  });
+
+  test("the choice resets when the viewer opens another artifact", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await theme(page, "dark");
+    const rec = budget();
+    const other = budget({ id: "OtherTrackerAAAAAAAAAA", title: "Other" });
+    await installCodeStore(page, [rec, other]);
+    await installChat(page, rec, [other]);
+    let panel = await openInChat(page, rec);
+    await panel.getByTestId("artifact-preview-theme").click();
+    await expect
+      .poll(async () => frameIsDark(await panelFrame(panel)))
+      .toBe(false);
+    panel = await openInChat(page, other);
+    await expect(panel.getByTestId("artifact-preview-theme")).toHaveAttribute(
+      "aria-label",
+      "Switch to light theme",
+    );
+    await expect
+      .poll(async () => frameIsDark(await panelFrame(panel)))
+      .toBe(true);
+    panel = await openInChat(page, rec);
+    await expect(panel.getByTestId("artifact-preview-theme")).toHaveAttribute(
+      "aria-label",
+      "Switch to light theme",
+    );
+    await expect
+      .poll(async () => frameIsDark(await panelFrame(panel)))
+      .toBe(true);
+  });
+
+  test("compact: in More, with the same words", async ({ page }) => {
+    await page.setViewportSize({ width: 540, height: 900 });
+    await theme(page, "dark");
+    const rec = budget();
+    await installCodeStore(page, [rec]);
+    await page.goto(`/workspace/artifacts/${APP}`);
+    const panel = page.getByTestId("artifact-panel");
+    await expect(panel).toHaveAttribute("data-compact", "true");
+    const frame = await panelFrame(panel);
+    await expect.poll(() => frameIsDark(frame)).toBe(true);
+    const app = await appState(page);
+    await expect(
+      panel
+        .getByTestId("artifact-header")
+        .getByTestId("artifact-preview-theme"),
+    ).toHaveCount(0);
+    await panel.getByTestId("artifact-more").click();
+    const item = page
+      .getByTestId("artifact-more-menu")
+      .getByTestId("artifact-preview-theme");
+    await expect(item).toHaveText("Switch to light theme");
+    await expect(item).toHaveRole("menuitem");
+    await item.click();
+    await expect.poll(() => frameIsDark(frame)).toBe(false);
+    expect(await appState(page)).toEqual(app);
+    await panel.getByTestId("artifact-more").click();
+    await expect(item).toHaveText("Switch to dark theme");
+    await page.keyboard.press("Escape");
+    await panel.getByTestId("artifact-tab-code").click();
+    await panel.getByTestId("artifact-more").click();
+    await expect(page.getByTestId("artifact-more-menu")).toBeVisible();
+    await expect(item).toHaveCount(0);
+  });
+});
+
 test.describe("touch", () => {
   test.use({ hasTouch: true, isMobile: true });
   test("no tooltip on a tap; 44 px targets", async ({ page }) => {
@@ -433,6 +741,7 @@ test.describe("what is shown per kind", () => {
       "artifact-ask-change",
       "artifact-ask-box",
       "artifact-fullscreen",
+      "artifact-preview-theme",
       "artifact-close",
       "artifact-check",
       "artifact-download-menu",
@@ -870,3 +1179,66 @@ test.describe("phone width", () => {
     });
   }
 });
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`crossing Apps and Artifacts loads the destination document policy (${scheme})`, async ({
+    page,
+  }) => {
+    await theme(page, scheme);
+    await installFakeBridge(page, { pins: ["today"] });
+    await installCodeStore(page, [budget()]);
+    await page.goto("/workspace/apps/today");
+    const appReady = async () => {
+      await expect(
+        page.frameLocator('[data-testid="app-frame"]').locator("body"),
+      ).toHaveAttribute("data-rendered", "all");
+      await expect(page.getByTestId("app-frame")).toHaveAttribute(
+        "sandbox",
+        "allow-scripts",
+      );
+    };
+    await appReady();
+    const navigate = async (link: Locator, apps: boolean) => {
+      const response = page.waitForResponse(
+        (r) =>
+          r.request().isNavigationRequest() &&
+          r.request().frame() === page.mainFrame(),
+      );
+      await link.click();
+      const csp = (await response).headers()["content-security-policy"]!;
+      const frameSrc = /frame-src ([^;]*)/.exec(csp)![1]!;
+      expect(frameSrc.includes("/api/apps/")).toBe(apps);
+      expect(frameSrc.includes("/api/artifacts/")).toBe(!apps);
+    };
+    await navigate(
+      page.getByRole("link", { name: "Artifacts", exact: true }),
+      false,
+    );
+    await page
+      .getByRole("link", { name: "Budget Tracker", exact: true })
+      .click();
+    await expect(
+      page
+        .frameLocator('[data-testid="artifact-frame"]')
+        .getByText("Spending by category", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("artifact-frame")).toHaveAttribute(
+      "sandbox",
+      "allow-scripts",
+    );
+    await navigate(page.getByTestId("pinned-app"), true);
+    await appReady();
+    await navigate(
+      page.getByRole("link", { name: "Artifacts", exact: true }),
+      false,
+    );
+    await page
+      .getByRole("link", { name: "Budget Tracker", exact: true })
+      .click();
+    await expect(
+      page
+        .frameLocator('[data-testid="artifact-frame"]')
+        .getByText("Spending by category", { exact: true }),
+    ).toBeVisible();
+  });
+}

@@ -99,16 +99,31 @@ export function cleanVars(
   return out;
 }
 
-/** The page's current Graphite tokens, read from <html>. */
-export function readThemeVars(): Record<string, string> {
+/** The Graphite tokens: with no theme, the page's current ones, read from
+ * <html>; with a theme, that theme's, read from a hidden element carrying
+ * its class (globals.css defines both `.light` and `.dark` on any element),
+ * so the app's own theme is not touched. */
+export function readThemeVars(theme?: FrameTheme): Record<string, string> {
   if (typeof window === "undefined") return {};
-  const style = getComputedStyle(document.documentElement);
-  const out: Record<string, string> = {};
-  for (const name of THEME_TOKENS) {
-    const value = style.getPropertyValue(name).trim();
-    if (value) out[name] = value;
+  let probe: HTMLElement | null = null;
+  if (theme) {
+    probe = document.createElement("div");
+    probe.className = theme;
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.display = "none";
+    document.body.appendChild(probe);
   }
-  return cleanVars(out);
+  try {
+    const style = getComputedStyle(probe ?? document.documentElement);
+    const out: Record<string, string> = {};
+    for (const name of THEME_TOKENS) {
+      const value = style.getPropertyValue(name).trim();
+      if (value) out[name] = value;
+    }
+    return cleanVars(out);
+  } finally {
+    probe?.remove();
+  }
 }
 
 export type FrameMessage =

@@ -539,12 +539,18 @@ function ArtifactFileDetailInner({
           {!isWriteFile && filepath.endsWith(".skill") && (
             <IconButton
               label={t.common.install}
+              tip={t.toolCalls.skillInstallTooltip}
+              aria-busy={isInstalling || undefined}
               disabled={
                 isInstalling || env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"
               }
               onClick={handleInstallSkill}
             >
-              <PackageIcon />
+              {isInstalling ? (
+                <LoaderIcon className="animate-spin" data-testid="installing" />
+              ) : (
+                <PackageIcon />
+              )}
             </IconButton>
           )}
           {!isWriteFile && (
@@ -587,7 +593,11 @@ function ArtifactFileDetailInner({
           {buildPreview?.sample
             ? "Sample data — build preview. This is not your live app."
             : isDynamicManifest
-              ? `Live development preview · ${previewSession?.status ?? "not running"}`
+              ? `Live development preview · ${
+                  createPreviewFromManifest.isPending
+                    ? "starting"
+                    : (previewSession?.status ?? "not running")
+                }`
               : "File preview"}
         </span>
         {buildPreview?.appId && (

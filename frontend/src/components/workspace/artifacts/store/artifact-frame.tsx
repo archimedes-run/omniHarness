@@ -74,6 +74,8 @@ export interface LockedFrameProps {
    * fills its box (the side panel, the full page, full screen). */
   variant: "inline" | "panel";
   className?: string;
+  /** The viewer's preview theme; absent, the app's theme (as before). */
+  theme?: FrameTheme;
 }
 
 /** The locked frame, standalone: usable anywhere in the app (the chat
@@ -85,9 +87,11 @@ export function LockedFrame({
   title,
   variant,
   className,
+  theme: themeProp,
 }: LockedFrameProps) {
   const { resolvedTheme } = useTheme();
-  const theme: FrameTheme = resolvedTheme === "dark" ? "dark" : "light";
+  const theme: FrameTheme =
+    themeProp ?? (resolvedTheme === "dark" ? "dark" : "light");
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const controllerRef = useRef<ArtifactFrameController | null>(null);
   const [src, setSrc] = useState<string | null>(null);
@@ -103,6 +107,8 @@ export function LockedFrame({
   const [attempt, setAttempt] = useState(0);
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const themePropRef = useRef(themeProp);
+  themePropRef.current = themeProp;
 
   useEffect(() => {
     let live = true;
@@ -111,7 +117,7 @@ export function LockedFrame({
     setTorn(false);
     const controller = new ArtifactFrameController({
       theme: themeRef.current,
-      vars: readThemeVars(),
+      vars: readThemeVars(themePropRef.current),
       onSize: (h) => live && setHeight(h),
       onOpenRequest: (url) => {
         if (!live) return;
@@ -148,10 +154,10 @@ export function LockedFrame({
 
   useEffect(() => {
     const id = requestAnimationFrame(() =>
-      controllerRef.current?.setTheme(theme, readThemeVars()),
+      controllerRef.current?.setTheme(theme, readThemeVars(themeProp)),
     );
     return () => cancelAnimationFrame(id);
-  }, [theme]);
+  }, [theme, themeProp]);
 
   const parts = link ? splitLink(link) : null;
   const host = link ? new URL(link).host : "";
