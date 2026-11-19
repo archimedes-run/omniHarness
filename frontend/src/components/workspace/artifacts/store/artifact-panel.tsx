@@ -10,12 +10,15 @@ import {
   HistoryIcon,
   MaximizeIcon,
   MessageCircleIcon,
+  MoonIcon,
   PencilIcon,
   PinIcon,
   SparkleIcon,
+  SunIcon,
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { useTheme } from "next-themes";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,7 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { atText } from "@/core/apps/wording";
+import type { FrameTheme } from "@/core/artifacts/frame-host";
 import {
   ArtifactsApiError,
   downloadUrl,
@@ -217,6 +221,18 @@ function Viewer({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
+  // The preview's own theme (never the app's): chosen per artifact, so it
+  // falls back to the app theme when the viewer shows another artifact.
+  const { resolvedTheme } = useTheme();
+  const [themeChoice, setThemeChoice] = useState<{
+    id: string;
+    theme: FrameTheme;
+  } | null>(null);
+  if (themeChoice && themeChoice.id !== artifact.id) setThemeChoice(null);
+  const previewTheme =
+    themeChoice?.id === artifact.id ? themeChoice.theme : undefined;
+  const shownTheme: FrameTheme =
+    previewTheme ?? (resolvedTheme === "dark" ? "dark" : "light");
 
   const title = titleText(artifact.title);
   const v = artifact.versions.find((x) => x.n === shown);
@@ -272,6 +288,13 @@ function Viewer({
       () => actions.patch.mutateAsync({ pinned: !artifact.pinned }),
       artifact.pinned ? "Unpinned." : "Pinned.",
     );
+  const themeLabel =
+    shownTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  const toggleTheme = () =>
+    setThemeChoice({
+      id: artifact.id,
+      theme: shownTheme === "dark" ? "light" : "dark",
+    });
   const goFullscreen = () =>
     void previewBox.current?.requestFullscreen?.().catch(() => undefined);
 
@@ -558,6 +581,14 @@ function Viewer({
                   )}
                   {fullscreen && (
                     <DropdownMenuItem
+                      onSelect={toggleTheme}
+                      data-testid="artifact-preview-theme"
+                    >
+                      {themeLabel}
+                    </DropdownMenuItem>
+                  )}
+                  {fullscreen && (
+                    <DropdownMenuItem
                       onSelect={goFullscreen}
                       data-testid="artifact-fullscreen"
                     >
@@ -585,6 +616,16 @@ function Viewer({
           </DropdownMenu>
         </div>
         <span className="flex-1" />
+        {fullscreen && !compact && (
+          <IconButton
+            label={themeLabel}
+            onClick={toggleTheme}
+            data-testid="artifact-preview-theme"
+            data-theme={shownTheme}
+          >
+            {shownTheme === "dark" ? <SunIcon /> : <MoonIcon />}
+          </IconButton>
+        )}
         {fullscreen && !compact && (
           <IconButton
             label="Full screen"
@@ -675,6 +716,7 @@ function Viewer({
               editingSource={editingSource}
               onEditSourceDone={() => setEditingSource(false)}
               boxRef={previewBox}
+              previewTheme={previewTheme}
             />
           ) : (
             <div className="border-border bg-card min-w-0 rounded-[14px] border p-5 max-sm:p-3">

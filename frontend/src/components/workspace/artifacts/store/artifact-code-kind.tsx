@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import type { FrameTheme } from "@/core/artifacts/frame-host";
 import {
   ArtifactsApiError,
   type ArtifactDetail,
@@ -53,6 +54,7 @@ export function CodeKindView({
   editingSource = false,
   onEditSourceDone,
   boxRef,
+  previewTheme,
 }: {
   artifact: ArtifactDetail;
   version: number;
@@ -62,6 +64,9 @@ export function CodeKindView({
   editingSource?: boolean;
   onEditSourceDone?: () => void;
   boxRef?: React.RefObject<HTMLDivElement | null>;
+  /** The preview's own theme (the header's theme button); absent, the
+   * app's. */
+  previewTheme?: FrameTheme;
 }) {
   const [page, setPage] = useState<string | undefined>(undefined);
   const v = artifact.versions.find((x) => x.n === version);
@@ -172,6 +177,7 @@ export function CodeKindView({
                 title={title}
                 variant="panel"
                 className="flex min-h-0 flex-1 flex-col"
+                theme={previewTheme}
               />
             </div>
           </div>
