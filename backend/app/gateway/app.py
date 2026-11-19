@@ -439,9 +439,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # Apps (Spec 011): keep recently opened apps' sources warm. Every
         # worker runs the loop; a lease in the shared store lets one work.
-        from app.gateway.apps.refresher import run_forever as run_apps_refresher
+        # A failing pass is logged and retried with backoff; an unexpected
+        # end of the loop is logged (refresher.start).
+        from app.gateway.apps.refresher import start as start_apps_refresher
 
-        apps_refresher = asyncio.create_task(run_apps_refresher(app.state))
+        apps_refresher = start_apps_refresher(app.state)
 
         # A lead turn whose last cards expired resumes, at most once (spec
         # 009, owner decision M2; app.gateway.resume). Every worker sweeps; a
