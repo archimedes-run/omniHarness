@@ -9,8 +9,9 @@ The order of a read is fixed:
 
   1. read-only checks (checks.py), every call, before the cache;
   2. the cache, keyed by (owner, app, source, manifest hash), in the shared SQL
-     store; fresh enough: answered at once; stale: answered, and refreshed in
-     the background; missing: fetched now;
+     store; fresh enough: answered at once; due: answered, and refreshed in
+     the background; missing, or past the "may be out of date" line (twice
+     refresh_s): fetched now;
   3. at most one upstream call per source per UPSTREAM_MIN_INTERVAL_S across
      workers (a conditional UPDATE claims it);
   4. the raw result is projected to the declared fields BEFORE anything is
@@ -124,7 +125,8 @@ async def fetch(app_state, owner_id: str, entry: Entry, spec: dict) -> tuple[str
     return ("empty" if catalog.is_empty(projected) else "fresh"), selected, None
 
 
-async def fetch_and_record(app_state, repo, app: AppRecord, name: str) -> None:
+async def fetch_and_record(app_state, repo, app: AppRecord, name: str) -> tuple[str, str | None]:
+    """Fetch one source and store its answer. Returns (state, fixed reason)."""
     spec = app.sources[name]
     entry = catalog.get_entry(spec["use"])
     try:
@@ -143,6 +145,13 @@ async def fetch_and_record(app_state, repo, app: AppRecord, name: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001 - the error's text can carry the data being written
         logger.warning("app %s source %s: the answer could not be stored (%s)", app.app_id, name, type(exc).__name__)
+    return state, reason
+
+
+def is_stale(spec: dict, row: dict | None, now: float | None = None) -> bool:
+    """Older than twice `refresh_s` (FR-013): the tile says "May be out of date"."""
+    fetched = row.get("fetched_at") if row else None
+    return bool(fetched and (now if now is not None else time.time()) - fetched > 2 * spec["refresh_s"])
 
 
 def result(name: str, spec: dict, row: dict | None) -> dict:
@@ -153,7 +162,7 @@ def result(name: str, spec: dict, row: dict | None) -> dict:
     state = row["state"]
     data = json.loads(row["data"]) if row.get("data") and state != "not_connected" else None
     fetched = row.get("fetched_at")
-    stale = bool(fetched and now - fetched > 2 * spec["refresh_s"]) or (state == "failed" and data is not None)
+    stale = is_stale(spec, row, now) or (state == "failed" and data is not None)
     return {"source": name, "state": state, "data": data, "fetched_at": iso(fetched), "stale": stale, "reason": row.get("reason") if state == "failed" else None}
 
 
@@ -192,7 +201,11 @@ async def serve(app_state, repo, app: AppRecord, name: str, *, force: bool = Fal
     if not due:
         return result(name, spec, row)
     claimed = await repo.claim_upstream(**key, min_interval_s=UPSTREAM_MIN_INTERVAL_S)
-    if answered is not None and not force:
+    # Merely due: answer from the cache, refresh behind it. Already past the
+    # "May be out of date" line (the app was not open for a while, so the
+    # refresher let it lapse; FR-014): read now, bounded by READ_TIMEOUT_S,
+    # rather than open on data the tile would call out of date.
+    if answered is not None and not force and not (claimed and is_stale(spec, row)):
         if claimed:
             _background(app_state, repo, app, name)
         return result(name, spec, row)
