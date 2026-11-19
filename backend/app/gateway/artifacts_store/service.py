@@ -150,6 +150,34 @@ def _refusal(lead: str, exc: Exception) -> str:
     return f"{lead}: an unexpected error."
 
 
+def _hoist(content: Any, fix_of: int | None, note: str | None) -> tuple[Any, int | None, str | None]:
+    """`fix_of` and `note` sent INSIDE an html/react `content` object (a common
+    slip) move to the call's own arguments: only those two keys, only when the
+    call does not pass them itself, only with the type the argument takes.
+    Anything else stays where it was, so the content's own validation refuses it."""
+    if not isinstance(content, dict):
+        return content, fix_of, note
+    content = dict(content)
+    if fix_of is None and type(content.get("fix_of")) is int:
+        fix_of = content.pop("fix_of")
+    if note is None and isinstance(content.get("note"), str):
+        note = content.pop("note")
+    return content, fix_of, note
+
+
+def _call_shape(kind: str, artifact_id: str | None, base_version: int | None, fix_of: int | None) -> str:
+    """The one html/react update call to send, in one line."""
+    fix = f", fix_of={fix_of}" if fix_of is not None else ""
+    body = 'content={"entry": "App.tsx", "files": {"App.tsx": "..."}}' if kind == "react" else 'content="<!doctype html>..."'
+    return f'artifact_update(id="{artifact_id}", base_version={base_version}{fix}, {body})'
+
+
+def _send(kind: str, artifact_id: str | None, base_version: int | None, fix_of: int | None) -> str:
+    """What an html/react update refusal adds: the exact call shape."""
+    edits = "edits are for text kinds only, never react." if kind == "react" else "edits are for text kinds only (html included)."
+    return f"Send: {_call_shape(kind, artifact_id, base_version, fix_of)}. {edits}"
+
+
 def apply_edits(text: str, edits: list[Any]) -> str:
     if not edits:
         raise InvalidRequest("edits is empty.")
@@ -228,6 +256,10 @@ class GatewayArtifactController:
         except StoreError as exc:
             return _refusal("Not changed", exc), None
         if current["kind"] in kinds.CODE_KINDS:
+            if current["kind"] in ("html", "react"):
+                content, fix_of, note = _hoist(content, fix_of, note)
+                if fix_of is None:
+                    fix_of = self._implicit_fix_of(store, owner_id, artifact_id, base_version, context)
             if fix_of is not None and lineage != "user":
                 lineage, source = self._fix_lineage(store, owner_id, artifact_id, fix_of, context) or (lineage, source)
             return self._code_write(store, context, owner_id, thread_id, kind=current["kind"], content=content, edits=edits, lineage=lineage, source=source, note=note, artifact_id=artifact_id, base_version=base_version, fix_of=fix_of)
@@ -289,9 +321,9 @@ class GatewayArtifactController:
         try:
             if artifact_id is not None:
                 if (content is None) == (edits is None):
-                    raise InvalidRequest("pass either content or edits.")
+                    raise InvalidRequest("pass either content or edits. " + _send(kind, artifact_id, base_version, fix_of))
                 if kind == "react" and edits is not None:
-                    raise InvalidRequest("a react artifact takes content: the whole {entry, files} object.")
+                    raise InvalidRequest("a react artifact takes content: the whole {entry, files} object. " + _send(kind, artifact_id, base_version, fix_of))
                 latest = store.get(owner_id, artifact_id)
                 if latest["latest_version"] != base_version:
                     raise store_mod.Stale(f"This artifact changed: the latest version is {latest['latest_version']}.", current_version=latest["latest_version"])
@@ -312,7 +344,12 @@ class GatewayArtifactController:
                 else:
                     summary, version = store.add_version(owner_id, artifact_id, base_version=int(base_version), build=make, **write)
             else:
-                data, parsed = frame.canonical_react_source(content)
+                try:
+                    data, parsed = frame.canonical_react_source(content)
+                except InvalidContent as exc:
+                    if artifact_id is None:
+                        raise
+                    raise InvalidContent(f"{exc} {_send(kind, artifact_id, base_version, fix_of)}") from None
                 if fix_of is not None and artifact_id is not None:
                     # Refuse a fix the rule forbids BEFORE spending a build on it.
                     store.check_fix(owner_id, artifact_id, int(fix_of))
@@ -350,9 +387,7 @@ class GatewayArtifactController:
             if fix_of is not None:
                 lines.append(f"This version was the automatic fix of version {fix_of}: do not run another automatic fix. Tell the person what still fails; they can ask for another try.")
             else:
-                lines.append(
-                    f"Run ONE automatic fix now, without asking: read the details with artifact_read(id={summary['id']}, version={n}), then call artifact_update with fix_of={n} and base_version={n}. Only one automatic fix is allowed."
-                )
+                lines.append(f"Run ONE automatic fix now, without asking: read the details with artifact_read(id={summary['id']}, version={n}), then call {_call_shape(kind, summary['id'], n, n)}. Only one automatic fix is allowed.")
         elif findings:
             lines.append(f"Read the list with artifact_read(id={summary['id']}, version={n}).")
         return "\n".join(lines), binding(summary, version)
@@ -379,6 +414,30 @@ class GatewayArtifactController:
         lineage `user`."""
         meta = cls._version_read(store, owner_id, artifact_id, args, result)
         return meta is not None and meta["lineage"] == "user"
+
+    @staticmethod
+    def _implicit_fix_of(store: ArtifactStore, owner_id: str, artifact_id: str, base_version: Any, context: dict) -> int | None:
+        """The version an html/react update IS the automatic fix of, decided
+        from stored state, never from an argument: the base version, when it
+        is a version of THIS artifact, its checks (or build) failed and it was
+        written in this same run, and the store's one-fix rule allows it
+        (check_fix: not itself a fix, not fixed before). The caller then treats
+        the call exactly as `fix_of=<base>`, and _fix_lineage is evaluated with
+        all its conditions. Otherwise None and nothing changes: a second change
+        in the same turn meets the store's per-turn cap (_auto_fix_of), a base
+        from an earlier run (the owner asked for a change since) is no fix."""
+        run_id = context.get("run_id")
+        if not run_id:
+            return None
+        try:
+            target = int(base_version)
+            summary, version, _code, _check = store.code_version(owner_id, artifact_id, target)
+            if summary["kind"] not in ("html", "react") or version.turn_id != run_id:
+                return None
+            store.check_fix(owner_id, artifact_id, target)  # checks (or build) failed, not a fix, not fixed
+        except (StoreError, TypeError, ValueError):
+            return None
+        return target
 
     @classmethod
     def _fix_lineage(cls, store: ArtifactStore, owner_id: str, artifact_id: str, fix_of: Any, context: dict) -> tuple[str, str | None] | None:
