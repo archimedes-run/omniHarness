@@ -8,6 +8,7 @@ app.policy.lineage.is_user_turn.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 USER_TURN_MARKER = "omniharness_user_turn"
@@ -108,34 +109,64 @@ def _result_tool_name(messages: list[Any], result: Any) -> str:
     return ""
 
 
+#: A folded non-tool input's label in the summary record: the server-set
+#: message name when it is a plain identifier, never the message's text.
+_INPUT_LABEL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+#: Carried forward for an earlier summary whose record predates `other_inputs`.
+UNRECORDED_INPUTS = "an earlier summary without a record of its other inputs"
+
+
+def _input_label(message: Any, kind: str | None) -> str:
+    name = message.get("name") if isinstance(message, dict) else getattr(message, "name", None)
+    base = str(kind or "message")
+    return f"{base}:{name}" if isinstance(name, str) and _INPUT_LABEL.match(name) else base
+
+
 def summarized_turn(messages: list[Any]) -> dict[str, Any]:
     """The record for TURN_SUMMARY_MARKER: walking back from the newest
     summarized message to the latest turn start (the person's tagged message
     or an invitation), the tools whose results are folded into the summary.
     An earlier summary of the same turn is carried forward. No start found:
-    `start_found` is False, and the walk counts the turn as private."""
+    `start_found` is False, and the walk counts the turn as private.
+
+    Two more fields, written by the server only, read by the artifact fix's
+    lineage (app.gateway.artifacts_store.service._fix_lineage) and nothing
+    else: `start` ("user" or "invitation", absent when unknown) and
+    `other_inputs`, a label (message type and server-set name, never its
+    text) for every folded message that is neither a tool result, an AI
+    message, the turn's start nor an earlier summary: the human messages our
+    middlewares inject mid-turn (a previewed page's errors, a viewed image).
+    `tools` is unchanged by them."""
     tools: list[str] = []
+    others: list[str] = []
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         kind = _type(message)
         if kind == "tool":
             tools.insert(0, _result_tool_name(messages, message))
             continue
-        if kind != "human":
+        if kind in ("ai", "AIMessageChunk"):
             continue
         kwargs = _kwargs(message)
-        if kwargs.get(USER_TURN_MARKER) is True or kwargs.get(INVITATION_MARKER) is True:
+        if kind == "human" and (kwargs.get(USER_TURN_MARKER) is True or kwargs.get(INVITATION_MARKER) is True):
             key = message.get("id") if isinstance(message, dict) else getattr(message, "id", None)
-            return {"turn_key": str(key or ""), "tools": tools, "start_found": True}
-        if kwargs.get(UNTAGGED_INPUT_MARKER) is True:
-            return {"turn_key": "", "tools": tools, "start_found": False}
-        if TURN_SUMMARY_MARKER in kwargs:
+            start = "user" if kwargs.get(USER_TURN_MARKER) is True else "invitation"
+            return {"turn_key": str(key or ""), "tools": tools, "start_found": True, "start": start, "other_inputs": others}
+        if kind == "human" and kwargs.get(UNTAGGED_INPUT_MARKER) is True:
+            return {"turn_key": "", "tools": tools, "start_found": False, "other_inputs": others}
+        if kind == "human" and TURN_SUMMARY_MARKER in kwargs:
             earlier = kwargs[TURN_SUMMARY_MARKER]
             prior = earlier.get("tools") if isinstance(earlier, dict) else None
             if not isinstance(prior, list):
-                return {"turn_key": "", "tools": tools, "start_found": False}
-            return {"turn_key": str(earlier.get("turn_key") or ""), "tools": [*prior, *tools], "start_found": earlier.get("start_found") is True}
-    return {"turn_key": "", "tools": tools, "start_found": False}
+                return {"turn_key": "", "tools": tools, "start_found": False, "other_inputs": others}
+            prior_others = earlier.get("other_inputs")
+            carried = [*prior_others, *others] if isinstance(prior_others, list) else [UNRECORDED_INPUTS, *others]
+            record = {"turn_key": str(earlier.get("turn_key") or ""), "tools": [*prior, *tools], "start_found": earlier.get("start_found") is True, "other_inputs": carried}
+            if earlier.get("start") in ("user", "invitation"):
+                record["start"] = earlier["start"]
+            return record
+        others.insert(0, _input_label(message, kind))
+    return {"turn_key": "", "tools": tools, "start_found": False, "other_inputs": others}
 
 
 def delegated_result(text: str, result: Any, *, agent: str, tool_call_id: str, name: str) -> Any:

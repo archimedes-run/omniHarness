@@ -421,7 +421,7 @@ def test_a_summary_record_is_judged_like_the_results_it_replaced():
 
     person = mark_user_turn(HumanMessage(content="find restaurants", id="turn-1"))
     clean = summarized_turn([person, _step(_call("web_search", {"query": "q"}, "s1")), ToolMessage(content="r", tool_call_id="s1")])
-    assert clean == {"turn_key": "turn-1", "tools": ["web_search"], "start_found": True}
+    assert clean == {"turn_key": "turn-1", "tools": ["web_search"], "start_found": True, "start": "user", "other_inputs": []}
     assert _walk([_summary_message(clean)]).private is False
     assert _walk([_summary_message(clean)]).turn_key == "turn-1"
     # A private read folded in, or after the summary, counts.
