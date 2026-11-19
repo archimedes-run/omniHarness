@@ -102,6 +102,18 @@ def _summary_record(message: Any) -> dict | None:
     return record
 
 
+_LABEL_CHARS = 64
+
+
+def _clean_owner_summary(record: dict, allowed: frozenset[str]) -> bool:
+    """A summary that folded in the start of the OWNER's turn (start "user")
+    and nothing but `allowed` tool results: no other folded input (an
+    injected page error, a viewed image), recorded as present and empty. An
+    older record without these fields does not qualify."""
+    others = record.get("other_inputs")
+    return record.get("start_found") is True and record.get("start") == "user" and isinstance(others, list) and not others and all(name in allowed for name in record["tools"])
+
+
 def _folded_untrusted(messages: list) -> str:
     """For the stored SOURCE label only (the origin stays content): when the
     walk stopped at a summary instead of the owner's message, the tools it
@@ -117,7 +129,7 @@ def _folded_untrusted(messages: list) -> str:
             return ""
         names: list[str] = []
         for name in record["tools"]:
-            label = name if isinstance(name, str) and name else "a tool result"
+            label = name[:_LABEL_CHARS] if isinstance(name, str) and name else "a tool result"
             if label not in TRUSTED_TOOL_RESULTS and label not in names:
                 names.append(label)
         return ", ".join(names)
@@ -374,7 +386,7 @@ class GatewayArtifactController:
         version's lineage and source, or None (the turn's own lineage stands).
 
         Everything is established by the server, never by an argument:
-        * `fix_of` passes the store's one-fix rule (a version of THIS artifact
+        * the artifact is html or react, `fix_of` passes the store's one-fix rule (a version of THIS artifact
           whose checks failed, not itself a fix, not fixed before), and that
           version was written in this same run;
         * walking back from the call, every tool result is either a trusted
@@ -383,8 +395,8 @@ class GatewayArtifactController:
           of THIS artifact whose structured part names the fixed version or a
           `user` version of it;
         * the walk ends at the owner's own message, or at a mid-turn summary
-          that saw the turn's start and folded in nothing but artifact_create
-          and artifact_update results.
+          that saw the OWNER's turn start and folded in nothing but
+          artifact_create and artifact_update results (_clean_owner_summary).
         Anything else (a page, mail, a file, a command, a sub-agent, another
         artifact, any other read, an automation's turn) and the rule does not
         apply. Inheritance never upgrades: a content version's fix stays
@@ -399,10 +411,10 @@ class GatewayArtifactController:
         try:
             target = int(fix_of)
             store.check_fix(owner_id, artifact_id, target)
-            fixed = store.version(owner_id, artifact_id, target)[1]
+            summary, fixed, _row = store.version(owner_id, artifact_id, target)
         except (StoreError, TypeError, ValueError):
             return None
-        if fixed.get("turn_id") != run_id:
+        if summary["kind"] not in ("html", "react") or fixed.get("turn_id") != run_id:
             return None
         for message in reversed(messages):
             if is_tool_result(message):
@@ -418,7 +430,7 @@ class GatewayArtifactController:
             if is_user_turn(message):
                 break
             record = _summary_record(message)
-            if record is not None and record.get("start_found") is True and all(name in ARTIFACT_ACK_TOOLS for name in record["tools"]):
+            if record is not None and _clean_owner_summary(record, ARTIFACT_ACK_TOOLS):
                 break
             return None
         else:
