@@ -83,7 +83,45 @@ def turn_lineage(context: dict, *, exempt_read=None) -> tuple[str, str | None]:
     origin, source = initiation_origin(messages, synthetic=is_synthetic_turn(context))
     if origin == ORIGIN_USER:
         return "user", None
-    return "content", (source or origin or "unknown")
+    return "content", (source or _folded_untrusted(messages) or origin or "unknown")
+
+
+def _summary_record(message: Any) -> dict | None:
+    """The record a mid-turn summary carries (turns.TURN_SUMMARY_MARKER): the
+    tools whose results it folded in, and whether it saw the turn's start.
+    Server-set only; None for any other message or a malformed record."""
+    from app.policy.lineage import _message_type
+    from omniharness.agents.turns import TURN_SUMMARY_MARKER
+
+    if _message_type(message) != "human":
+        return None
+    kwargs = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    record = kwargs.get(TURN_SUMMARY_MARKER) if isinstance(kwargs, dict) else None
+    if not isinstance(record, dict) or not isinstance(record.get("tools"), list):
+        return None
+    return record
+
+
+def _folded_untrusted(messages: list) -> str:
+    """For the stored SOURCE label only (the origin stays content): when the
+    walk stopped at a summary instead of the owner's message, the tools it
+    folded in that are not harness acknowledgements, so a real source is
+    named rather than "unknown"."""
+    from app.policy.lineage import TRUSTED_TOOL_RESULTS, _message_type, is_tool_result
+
+    for message in reversed(messages):
+        if is_tool_result(message) or _message_type(message) == "ai":
+            continue
+        record = _summary_record(message)
+        if record is None:
+            return ""
+        names: list[str] = []
+        for name in record["tools"]:
+            label = name if isinstance(name, str) and name else "a tool result"
+            if label not in TRUSTED_TOOL_RESULTS and label not in names:
+                names.append(label)
+        return ", ".join(names)
+    return ""
 
 
 def binding(summary: dict, version: dict) -> dict:
@@ -178,6 +216,8 @@ class GatewayArtifactController:
         except StoreError as exc:
             return _refusal("Not changed", exc), None
         if current["kind"] in kinds.CODE_KINDS:
+            if fix_of is not None and lineage != "user":
+                lineage, source = self._fix_lineage(store, owner_id, artifact_id, fix_of, context) or (lineage, source)
             return self._code_write(store, context, owner_id, thread_id, kind=current["kind"], content=content, edits=edits, lineage=lineage, source=source, note=note, artifact_id=artifact_id, base_version=base_version, fix_of=fix_of)
         if fix_of is not None:
             return "Not changed: fix_of is only for html and react artifacts whose checks failed.", None
@@ -306,20 +346,84 @@ class GatewayArtifactController:
         return "\n".join(lines), binding(summary, version)
 
     @staticmethod
-    def _own_user_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> bool:
-        """True for an artifact_read of THIS artifact whose version READ has
-        lineage `user`. The version is the one the read recorded in its
-        result's structured part, never what is latest now; a result without
-        it (or naming another artifact) is not exempt."""
+    def _version_read(store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> dict | None:
+        """The stored version an artifact_read of THIS artifact read: the one
+        the read recorded in its result's structured part (read_bound), never
+        what is latest now. None for a result without it or naming another
+        artifact."""
         if not isinstance(args, dict) or args.get("id") != artifact_id:
-            return False
+            return None
         read = result.get("artifact") if isinstance(result, dict) else getattr(result, "artifact", None)
         if not isinstance(read, dict) or read.get("type") != "omni_artifact_read" or read.get("artifact_id") != artifact_id:
-            return False
+            return None
         try:
-            return store.version(owner_id, artifact_id, int(read["version"]))[1]["lineage"] == "user"
+            return store.version(owner_id, artifact_id, int(read["version"]))[1]
         except (StoreError, KeyError, TypeError, ValueError):
-            return False
+            return None
+
+    @classmethod
+    def _own_user_read(cls, store: ArtifactStore, owner_id: str, artifact_id: str, args: dict, result) -> bool:
+        """True for an artifact_read of THIS artifact whose version READ has
+        lineage `user`."""
+        meta = cls._version_read(store, owner_id, artifact_id, args, result)
+        return meta is not None and meta["lineage"] == "user"
+
+    @classmethod
+    def _fix_lineage(cls, store: ArtifactStore, owner_id: str, artifact_id: str, fix_of: Any, context: dict) -> tuple[str, str | None] | None:
+        """The automatic fix of a failed html/react version inherits THAT
+        version's lineage and source, or None (the turn's own lineage stands).
+
+        Everything is established by the server, never by an argument:
+        * `fix_of` passes the store's one-fix rule (a version of THIS artifact
+          whose checks failed, not itself a fix, not fixed before), and that
+          version was written in this same run;
+        * walking back from the call, every tool result is either a trusted
+          harness acknowledgement (artifact_create/update, whose text, incl.
+          the system-check report, the gateway composes) or an artifact_read
+          of THIS artifact whose structured part names the fixed version or a
+          `user` version of it;
+        * the walk ends at the owner's own message, or at a mid-turn summary
+          that saw the turn's start and folded in nothing but artifact_create
+          and artifact_update results.
+        Anything else (a page, mail, a file, a command, a sub-agent, another
+        artifact, any other read, an automation's turn) and the rule does not
+        apply. Inheritance never upgrades: a content version's fix stays
+        content with the same source."""
+        from app.policy.lineage import ARTIFACT_ACK_TOOLS, _call_args, _message_type, _tool_name_of, is_tool_result, is_user_turn, tool_result_is_trusted
+        from app.policy.provenance import is_synthetic_turn
+
+        messages = context.get(MESSAGES_KEY)
+        run_id = context.get("run_id")
+        if not isinstance(messages, list) or not run_id or is_synthetic_turn(context):
+            return None
+        try:
+            target = int(fix_of)
+            store.check_fix(owner_id, artifact_id, target)
+            fixed = store.version(owner_id, artifact_id, target)[1]
+        except (StoreError, TypeError, ValueError):
+            return None
+        if fixed.get("turn_id") != run_id:
+            return None
+        for message in reversed(messages):
+            if is_tool_result(message):
+                name = _tool_name_of(messages, message)
+                if tool_result_is_trusted(message, name) and name in ARTIFACT_ACK_TOOLS:
+                    continue
+                read = cls._version_read(store, owner_id, artifact_id, _call_args(messages, message), message) if name == "artifact_read" else None
+                if read is not None and (read["n"] == target or read["lineage"] == "user"):
+                    continue
+                return None
+            if _message_type(message) == "ai":
+                continue
+            if is_user_turn(message):
+                break
+            record = _summary_record(message)
+            if record is not None and record.get("start_found") is True and all(name in ARTIFACT_ACK_TOOLS for name in record["tools"]):
+                break
+            return None
+        else:
+            return None
+        return fixed["lineage"], fixed.get("lineage_source")
 
     # -- reads (fenced, untrusted) ---------------------------------------------------
 
