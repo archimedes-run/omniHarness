@@ -217,6 +217,9 @@ SERVER_OWNED_RUN_KEYS: frozenset[str] = frozenset(
         "excluded_skills",
         "channel",
         "memory_user_id",
+        # MCP Studio's build run (omniharness.runtime.mcp.studio): set only by
+        # the Studio router for the run it starts.
+        "mcp_studio_server_id",
     }
 )
 

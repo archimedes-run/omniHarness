@@ -185,6 +185,13 @@ async def _run_additive_migrations(backend: str) -> None:
         ("mcp_secrets", "key_hint", "VARCHAR(8)", "NULL"),
         ("mcp_servers", "container_id", "VARCHAR(128)", "NULL"),
         ("mcp_servers", "container_port", "INTEGER", "NULL"),
+        # MCP Studio: approval bound to the approved code, the deployed code,
+        # and the build thread
+        ("mcp_servers", "approved_code_sha256", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "approved_by", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "approved_at", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "deployed_code_sha256", "VARCHAR(64)", "NULL"),
+        ("mcp_servers", "build_thread_id", "VARCHAR(64)", "NULL"),
         # Phase 1 platform event discriminator (migration 0011)
         ("run_events", "source", "VARCHAR(32)", "NULL"),
         # Phase 1 Slice 1: additive workflow columns (migration 0012)

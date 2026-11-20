@@ -546,8 +546,16 @@ You have access to skills that provide optimized workflows for specific tasks. E
 
 
 def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_config: AppConfig | None = None) -> str:
-    """Generate the skills prompt section with available skills list."""
+    """Generate the skills prompt section with available skills list.
+
+    ``available_skills`` None lists every enabled skill except the MCP
+    Studio-only ones (omniharness.runtime.mcp.studio): those are listed only
+    when named, which only a Studio build run's skill set does."""
+    from omniharness.runtime.mcp.studio import STUDIO_ONLY_SKILLS
+
     skills = get_enabled_skills_for_config(app_config)
+    if available_skills is None:
+        skills = [skill for skill in skills if skill.name not in STUDIO_ONLY_SKILLS]
 
     if app_config is None:
         try:
@@ -753,6 +761,17 @@ You can run coding jobs with the `code_job` tool: OpenCode builds or changes sof
 """
 
 
+def mcp_studio_section(studio_build: bool) -> str:
+    """One line for every run but an MCP Studio build run, when MCP Studio is
+    on here: it holds no tool to build an MCP server and says so."""
+    from omniharness.runtime.mcp.controller import get_mcp_build_controller
+    from omniharness.runtime.mcp.studio import STUDIO_ONLY_MESSAGE
+
+    if studio_build or get_mcp_build_controller() is None:
+        return ""
+    return f"\n<mcp_servers>{STUDIO_ONLY_MESSAGE} If asked to build one here, say that in one line; you have no tool for it.</mcp_servers>\n"
+
+
 def coding_jobs_section() -> str:
     """Spec 009, Slice 1: present only when a coding job can run here (the
     code_job tool is offered under the same condition)."""
@@ -776,6 +795,7 @@ def apply_prompt_template(
     connectors_off: list[str] | None = None,
     builder: bool = False,
     memory_off: bool = False,
+    studio_build: bool = False,
 ) -> str:
     # Get memory context. `user_id`: whose agent and memory; None reads the
     # effective user from context (a run); a request handler passes its own.
@@ -830,4 +850,4 @@ def apply_prompt_template(
     # The builder's guide, only for a run that holds the builder tools
     # (lead_agent.agent.builder_tools_for).
     builder_section = BUILDER_SECTION if builder else ""
-    return prompt + NO_SECRETS_SECTION + builder_section + connectors_off_section(connectors_off) + coding_jobs_section() + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"
+    return prompt + NO_SECRETS_SECTION + builder_section + connectors_off_section(connectors_off) + coding_jobs_section() + mcp_studio_section(studio_build) + f"\n<current_date>{datetime.now().strftime('%Y-%m-%d, %A')}</current_date>"

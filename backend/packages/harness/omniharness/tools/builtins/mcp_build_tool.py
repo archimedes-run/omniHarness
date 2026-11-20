@@ -12,18 +12,17 @@ from langgraph.typing import ContextT
 
 from omniharness.agents.thread_state import ThreadState
 from omniharness.runtime.mcp.controller import get_mcp_build_controller
-from omniharness.runtime.user_context import get_effective_user_id
+from omniharness.runtime.mcp.studio import STUDIO_ONLY_MESSAGE, studio_build_server_id
 
 
-def _get_user_id(runtime: ToolRuntime[ContextT, ThreadState]) -> str:
-    user_id = runtime.context.get("user_id") if runtime.context else None
-    return user_id or get_effective_user_id()
+def _reply(text: str, tool_call_id: str) -> Command:
+    return Command(update={"messages": [ToolMessage(text, tool_call_id=tool_call_id)]})
 
 
 @tool(
     "mcp_build",
     description=(
-        "Submit source code for an MCP server and run the automated checks. "
+        "Submit source code for the MCP server this MCP Studio build run was started for, and run the automated checks. "
         "The pipeline runs static and LLM security scans and detects required secrets. "
         "It does NOT run the server: the test phase runs only in a container and is "
         "unavailable until the MCP Build redesign, so the result is phase 'failed' with that reason. "
@@ -46,18 +45,28 @@ async def mcp_build_tool(
     """Submit source code for an MCP server and run the automated test pipeline."""
     controller = get_mcp_build_controller()
     if controller is None:
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        "MCP build service is not available in this environment.",
-                        tool_call_id=tool_call_id,
-                    )
-                ]
-            }
-        )
+        return _reply("MCP build service is not available in this environment.", tool_call_id)
 
-    user_id = _get_user_id(runtime)
+    # Only a build run MCP Studio started, for its own server, and only when
+    # the server's record confirms that run's thread and owner. Everything is
+    # read from the run's server-set context; the server_id argument is only
+    # compared against it.
+    context = runtime.context if isinstance(runtime.context, dict) else {}
+    target = studio_build_server_id(context)
+    if target is None:
+        return _reply(f"Not run: {STUDIO_ONLY_MESSAGE}", tool_call_id)
+    if server_id != target:
+        return _reply(f"Not run: this build run may only submit code for server {target}.", tool_call_id)
+    user_id = context.get("user_id")
+    thread_id = context.get("thread_id")
+    if not isinstance(user_id, str) or not user_id or not isinstance(thread_id, str) or not thread_id:
+        return _reply(f"Not run: {STUDIO_ONLY_MESSAGE}", tool_call_id)
+    try:
+        allowed = await controller.studio_build_allowed(server_id=target, thread_id=thread_id, user_id=user_id)
+    except Exception:
+        allowed = False
+    if not allowed:
+        return _reply(f"Not run: {STUDIO_ONLY_MESSAGE}", tool_call_id)
 
     try:
         status = await controller.submit_source_and_test(

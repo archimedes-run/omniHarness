@@ -36,6 +36,19 @@ class McpServerRow(Base):
     # Docker deployment: container ID and mapped host port (null when not deployed)
     container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     container_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The owner's approval, bound to the exact code approved: SHA-256 of the
+    # source's UTF-8 bytes, who approved it and when (ISO 8601). A server is
+    # approved only while this hash equals the hash of ``source_code``
+    # (omniharness.persistence.mcp_server.approval); ``approved`` above is kept
+    # in step but never read as the decision.
+    approved_code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # SHA-256 of the code the running container was built from (null when
+    # nothing is deployed).
+    deployed_code_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The thread MCP Studio opened for this server's build run.
+    build_thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -169,6 +169,7 @@ def get_available_tools(
     defer_overflow: bool = True,
     research_enabled: bool = False,
     artifact_tools: bool = False,
+    mcp_build_server_id: str | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -197,6 +198,11 @@ def get_available_tools(
             forgets fails closed.
             ToolCapExceededError only when the tools that cannot be moved
             exceed it on their own.
+        mcp_build_server_id: the server an MCP Studio build run was started
+            for (omniharness.runtime.mcp.studio.studio_build_server_id), or
+            None. ``mcp_build`` is offered only when it is set; the tool
+            checks the run again at dispatch. Default None: no other caller
+            (a chat, an agent, a delegate, the catalog) is ever offered it.
         defer_overflow: True for an agent that installs the
             DeferredToolFilterMiddleware (the lead): overflow connector
             toolkits are reached through tool_search. False for one that does
@@ -258,10 +264,11 @@ def get_available_tools(
     if code_jobs is not None and code_jobs.unavailable_reason() is None:
         builtin_tools.append(code_job_tool)
 
-    # Add mcp_build tool only when an MCPBuildController is registered (gateway mode).
+    # mcp_build: only for a build run MCP Studio started (MCP servers are
+    # built in Studio, never from a chat), and only in gateway mode.
     from omniharness.runtime.mcp.controller import get_mcp_build_controller
 
-    if get_mcp_build_controller() is not None:
+    if mcp_build_server_id and get_mcp_build_controller() is not None:
         builtin_tools.append(mcp_build_tool)
 
     # Add the Project Ledger tools only when a LedgerController is registered
@@ -613,7 +620,7 @@ def registrable_tool_names(app_config: AppConfig) -> list[str]:
     """EVERY tool name this process can offer an agent, whatever the conditions.
 
     `get_available_tools` decides per agent: a vision model gets view_image,
-    gateway mode gets preview and mcp_build, plan mode gets write_todos, the
+    gateway mode gets preview, an MCP Studio build run gets mcp_build, plan mode gets write_todos, the
     assistant in the owner's own chat gets the builder tools. A policy coverage check (007: every tool
     resolves to an explicit rule) needs the UNION, because a tool reachable
     under any condition must already have a rule when that condition arises.

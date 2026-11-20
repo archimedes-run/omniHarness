@@ -226,7 +226,7 @@ def test_every_registered_tool_resolves_to_an_explicit_rule(tmp_path, monkeypatc
 
         # Nothing get_available_tools can offer is missing from the list the
         # startup check reads.
-        offered = {t.name for t in get_available_tools(subagent_enabled=True, app_config=app.state.config)}
+        offered = {t.name for t in get_available_tools(subagent_enabled=True, app_config=app.state.config, mcp_build_server_id="studio-build")}
         assert offered <= set(registered), f"offered but not checked at startup: {sorted(offered - set(registered))}"
 
         live = {s["name"]: s for s in view["sources"] if s["state"] == "live"}

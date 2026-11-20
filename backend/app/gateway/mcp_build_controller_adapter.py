@@ -51,3 +51,6 @@ class GatewayMCPBuildController:
     async def stop(self, *, server_id: str, user_id: str) -> MCPBuildStatus:
         record = await self._manager.stop(server_id=server_id, user_id=user_id)
         return _to_status(record)
+
+    async def studio_build_allowed(self, *, server_id: str, thread_id: str, user_id: str) -> bool:
+        return await self._manager.studio_build_allowed(server_id=server_id, thread_id=thread_id, user_id=user_id)

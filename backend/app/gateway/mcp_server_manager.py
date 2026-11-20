@@ -23,6 +23,14 @@ Security invariants (enforced at the top of every mutating method)
 4. Agent-generated code NEVER runs in the gateway process or as its child. The
    test phase (``_run_server_sandbox_test``) is refused on main: it ran server.py
    as a gateway subprocess. It returns with the MCP Build redesign, in a container.
+
+5. Nothing agent-written is deployed, registered or connected without the
+   owner's approval of THAT code: ``approve`` records the SHA-256 of the
+   source it approves, and ``deploy``, ``register`` and ``connect`` each
+   refuse (``McpApprovalRequiredError``) unless that hash is the hash of the
+   source stored now. ``connect`` also needs the running container to have
+   been built from that same source. New source stops and disconnects the
+   server built from the old one before it is saved, and ends the approval.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from typing import Literal
 
 from app.gateway.mcp_egress import build_egress_rules
 from app.gateway.mcp_secrets import McpSecretsVault
+from omniharness.persistence.mcp_server.approval import code_sha256, current_code_approved, deployed_code_is_current
 from omniharness.persistence.mcp_server.sql import McpServerRepository
 from omniharness.skills.code_scanner import scan_python_code, scan_python_code_static
 
@@ -177,6 +186,14 @@ class McpContainerRemovalError(McpTeardownError):
 
 class McpDeployInProgressError(RuntimeError):
     """A deploy is running; stopping now would race the container it starts."""
+
+
+class McpApprovalRequiredError(RuntimeError):
+    """No approval exists for the server's current code."""
+
+
+#: What deploy / register / connect answer without an approval of the current code.
+APPROVAL_REQUIRED = "This code has not been approved. Approve the current code first; any change to the code needs a new approval."
 
 
 def _container_name(server_id: str) -> str:
@@ -381,9 +398,46 @@ class MCPServerManager:
 
         Ownership gate is at the top — identical to every other mutating method.
         """
-        await self._load_and_verify(server_id, user_id)
+        server = await self._load_and_verify(server_id, user_id)
+        await self._retire_for_new_source(server, source_code, user_id=user_id)
         await self._repo.update_source_code(server_id, source_code, user_id=user_id)
         return await self.test_server(server_id=server_id, user_id=user_id)
+
+    async def _retire_for_new_source(self, server: dict, source_code: str, *, user_id: str) -> None:
+        """Before different code is saved: stop and disconnect whatever runs
+        the old code, and forget the old code's test result.
+
+        Teardown first, then the save: if teardown fails the new code is not
+        saved (``McpTeardownError``), so no container or config entry outlives
+        the code it was approved for, a gateway restart included. The approval
+        itself ends in the same write as the new code (the repository).
+        """
+        server_id = server["id"]
+        if code_sha256(source_code) == code_sha256(server.get("source_code")):
+            return
+        async with self._lock:
+            existing = self._records.get(server_id)
+        if existing is not None and existing.phase == "deploying":
+            raise McpDeployInProgressError("A deploy is in progress. Wait for it to finish, then submit the new code.")
+        if server.get("container_id") or server.get("container_port") or existing is not None and existing.container_id:
+            await self._remove_container(server_id, server)
+            await self._repo.update_container_info(server_id, container_id=None, container_port=None, status="stopped", user_id=user_id)
+        _remove_config_entry(server)
+        async with self._lock:
+            # A "verified" result was for the old code: approve must not read it.
+            self._records[server_id] = MCPBuildRecord(server_id=server_id, phase="idle", owner_id=user_id)
+
+    async def studio_build_allowed(self, *, server_id: str, thread_id: str, user_id: str) -> bool:
+        """The server's own record names this thread as its Studio build thread."""
+        server = await self._repo.get(server_id, user_id=user_id)
+        return bool(server is not None and thread_id and server.get("build_thread_id") == thread_id)
+
+    @staticmethod
+    def _require_current_approval(server: dict) -> str:
+        """The hash of the server's code, when an approval exists for exactly it."""
+        if not current_code_approved(server):
+            raise McpApprovalRequiredError(APPROVAL_REQUIRED)
+        return str(server["approved_code_sha256"])
 
     async def test_server(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
         """Run the full test pipeline: static scan → LLM scan → sandbox execution.
@@ -543,20 +597,31 @@ class MCPServerManager:
                 self._records[server_id] = record
             return record
 
-    async def approve(self, *, server_id: str, user_id: str) -> MCPBuildRecord:
-        """Mark a server as approved.
+    async def approve(self, *, server_id: str, user_id: str, expected_code_sha256: str | None = None) -> MCPBuildRecord:
+        """Approve the server's current code: record its SHA-256, who and when.
 
         Requires phase=="verified": the server must have completed the sandbox
         test and discovered at least one tool. Servers in "testing" (sandbox
         failed or no tools found) or any other phase cannot be approved.
+
+        ``expected_code_sha256``: the hash of the code the owner was shown.
+        When given and the code stored now differs, nothing is approved
+        (``ValueError``). The record is written only if the stored code still
+        has the hash read here (the repository checks it in the same write).
         """
-        await self._load_and_verify(server_id, user_id)
+        server = await self._load_and_verify(server_id, user_id)
         async with self._lock:
             current = self._records.get(server_id)
         current_phase = current.phase if current is not None else "unknown"
         if current_phase != "verified":
             raise PermissionError(f"MCP server {server_id!r} cannot be approved from phase {current_phase!r}. Run POST /test first; the server must reach 'verified' (sandbox connected + tools discovered) before it can be approved.")
-        await self._repo.set_approved(server_id, True, user_id=user_id)
+        current_sha = code_sha256(server.get("source_code"))
+        if current_sha is None:
+            raise ValueError("No source code to approve")
+        if expected_code_sha256 is not None and expected_code_sha256 != current_sha:
+            raise ValueError("The code changed since it was shown. Review the current code and approve again.")
+        if not await self._repo.record_approval(server_id, code_sha256_approved=current_sha, approved_by=user_id, user_id=user_id):
+            raise ValueError("The code changed while it was being approved. Review the current code and approve again.")
         # Preserve all build data — only the phase changes on approve/register/stop.
         # Creating a blank MCPBuildRecord here would wipe tools_discovered / test_results,
         # causing the MCP Tools panel to show "0 tools discovered" after deploy.
@@ -582,8 +647,7 @@ class MCPServerManager:
         not be accessible to the agent.
         """
         server = await self._load_and_verify(server_id, user_id)
-        if not server.get("approved"):
-            raise PermissionError(f"MCP server {server_id!r} has not been approved for registration")
+        self._require_current_approval(server)
 
         await self._repo.update_status(server_id, "deployed", user_id=user_id)
         async with self._lock:
@@ -729,20 +793,23 @@ class MCPServerManager:
         source = server.get("source_code") or ""
         if not source:
             raise ValueError("No source code — build the server first")
+        approved_sha = self._require_current_approval(server)
 
         async with self._lock:
             existing = self._records.get(server_id)
-        deploying = MCPBuildRecord(
-            server_id=server_id,
-            phase="deploying",
-            owner_id=user_id,
-            required_key_names=existing.required_key_names if existing else [],
-            tools_discovered=existing.tools_discovered if existing else [],
-            test_results=existing.test_results if existing else [],
-            last_verified_at=existing.last_verified_at if existing else None,
-            deploy_steps=_init_deploy_steps(),
-        )
-        async with self._lock:
+            if existing is not None and existing.phase == "deploying":
+                # A second click or a retry: the deploy already running answers.
+                return existing
+            deploying = MCPBuildRecord(
+                server_id=server_id,
+                phase="deploying",
+                owner_id=user_id,
+                required_key_names=existing.required_key_names if existing else [],
+                tools_discovered=existing.tools_discovered if existing else [],
+                test_results=existing.test_results if existing else [],
+                last_verified_at=existing.last_verified_at if existing else None,
+                deploy_steps=_init_deploy_steps(),
+            )
             self._records[server_id] = deploying
 
         # Fire the slow docker work in the background — caller returns immediately.
@@ -752,6 +819,7 @@ class MCPServerManager:
                 user_id=user_id,
                 source=source,
                 existing=existing,
+                code_sha256_approved=approved_sha,
             ),
             name=f"mcp-deploy-{server_id[:12]}",
         )
@@ -764,8 +832,14 @@ class MCPServerManager:
         user_id: str,
         source: str,
         existing: MCPBuildRecord | None,
+        code_sha256_approved: str,
     ) -> None:
-        """Background task: docker build + docker run, update in-memory record when done."""
+        """Background task: docker build + docker run, update in-memory record when done.
+
+        ``source`` is the code whose approval ``deploy`` checked; its hash is
+        stored as the deployed code. If the code or its approval changed while
+        the image was built, the new container is removed and the deploy fails.
+        """
 
         def _make_record(phase: str, **kwargs: object) -> MCPBuildRecord:
             return MCPBuildRecord(
@@ -844,14 +918,21 @@ class MCPServerManager:
             await self._advance_step(server_id, "launching", "registering", detail=f"Container started on port {host_port}")
 
             # ── Step 4: Registering ───────────────────────────────────────
+            # The approval is the owner's alone (approve); deploy never grants it.
+            # Still the approved code? Else the container just started must go.
+            now = await self._repo.get(server_id, user_id=user_id)
+            if now is None or not current_code_approved(now) or code_sha256(now.get("source_code")) != code_sha256_approved:
+                await self._remove_container(server_id, server={"container_id": container_id})
+                await self._fail_step(server_id, "registering", "The code changed during the deploy; nothing was deployed. Approve the current code and deploy again.")
+                return
             await self._repo.update_container_info(
                 server_id,
                 container_id=container_id,
                 container_port=host_port,
                 status="deployed",
                 user_id=user_id,
+                deployed_code_sha256=code_sha256_approved,
             )
-            await self._repo.set_approved(server_id, True, user_id=user_id)
 
             # Finalize: mark registering done and flip phase to deployed
             async with self._lock:
@@ -884,15 +965,18 @@ class MCPServerManager:
 
         Returns {"sse_url": ..., "server_name": ...}.
         """
-        from omniharness.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+        from omniharness.config.extensions_config import ExtensionsConfig, atomic_write_json, reload_extensions_config
 
         db_server = await self._load_and_verify(server_id, user_id)
-        async with self._lock:
-            record = self._records.get(server_id)
+        self._require_current_approval(db_server)
 
-        container_port = (record.container_port if record else None) or db_server.get("container_port")
-        if not container_port:
+        # The stored deployment, never the in-memory record: what is connected
+        # must be the container built from the approved code.
+        container_port = db_server.get("container_port")
+        if not container_port or not db_server.get("container_id"):
             raise ValueError("Server is not deployed — run deploy first")
+        if not deployed_code_is_current(db_server):
+            raise McpApprovalRequiredError("The running server was built from different code. Deploy the approved code first.")
 
         # When the gateway runs inside Docker, `localhost` resolves to the
         # container itself — not the host machine where MCP containers run.
@@ -910,19 +994,28 @@ class MCPServerManager:
         if config_path is None:
             config_path = Path.cwd().parent / "extensions_config.json"
 
-        current_cfg = get_extensions_config()
-        config_data: dict = {
-            "mcpServers": {n: s.model_dump() for n, s in current_cfg.mcp_servers.items()},
-            "skills": {n: {"enabled": sk.enabled} for n, sk in current_cfg.skills.items()},
-        }
-        config_data["mcpServers"][server_name] = {
+        # Edited as JSON (every other key kept as written) and written
+        # atomically: temp file in the same directory, fsync, rename. A crash
+        # mid-write leaves the previous file whole.
+        try:
+            config_data = json.loads(config_path.read_text(encoding="utf-8") or "{}") if config_path.exists() else {}
+        except ValueError as exc:
+            raise ValueError(f"extensions_config.json is not valid JSON, so it was not changed: {exc}") from exc
+        if not isinstance(config_data, dict):
+            raise ValueError("extensions_config.json is not a JSON object, so it was not changed")
+        servers = config_data.get("mcpServers")
+        if not isinstance(servers, dict):
+            servers = config_data["mcpServers"] = {}
+        existing_entry = servers.get(server_name)
+        if isinstance(existing_entry, dict) and not _STUDIO_SSE_URL_RE.match(str(existing_entry.get("url") or "")):
+            raise ValueError(f"extensions_config.json already has an entry named {server_name!r} that MCP Studio did not write; rename the server or remove that entry")
+        servers[server_name] = {
             "enabled": True,
             "type": "sse",
             "url": internal_url,  # gateway-accessible URL
             "description": db_server.get("description") or f"MCP server: {db_server['name']}",
         }
-        with open(config_path, "w", encoding="utf-8") as fh:
-            json.dump(config_data, fh, indent=2)
+        atomic_write_json(config_path, config_data)
 
         reload_extensions_config()
         logger.info("MCP server %r connected at %s (extensions_config updated)", server_name, internal_url)

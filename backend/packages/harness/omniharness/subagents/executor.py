@@ -499,6 +499,11 @@ class SubagentExecutor:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} no enabled skills found")
             return []
 
+        # MCP Studio-only skills are never a delegate's (omniharness.runtime.mcp.studio).
+        from omniharness.runtime.mcp.studio import STUDIO_ONLY_SKILLS
+
+        all_skills = [s for s in all_skills if s.name not in STUDIO_ONLY_SKILLS]
+
         # Filter by config.skills whitelist
         if self.config.skills is not None:
             allowed = set(self.config.skills)
