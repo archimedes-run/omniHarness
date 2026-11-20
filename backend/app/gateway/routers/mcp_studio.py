@@ -9,7 +9,7 @@ GET  /api/mcp-studio/servers/{id}/build             build status snapshot
 PUT  /api/mcp-studio/servers/{id}/secrets           write secrets (write-only)
 POST /api/mcp-studio/servers/{id}/secrets/reveal    one stored value, owner only, password re-entered
 POST /api/mcp-studio/servers/{id}/test              trigger test pipeline
-POST /api/mcp-studio/servers/{id}/approve           mark server approved
+POST /api/mcp-studio/servers/{id}/approve           approve the server's current code (its SHA-256)
 POST /api/mcp-studio/servers/{id}/register          register approved server for agent use
 POST /api/mcp-studio/servers/{id}/stop              stop and remove the server's container
 DELETE /api/mcp-studio/servers/{id}                 remove container, config entry, secrets, record
@@ -22,6 +22,12 @@ Security invariants
 * owner_id passed to the vault / manager is always the verified requesting user,
   never server.owner_id read back from the row.
 * test / approve / register / stop each call _load_and_verify as their first action.
+* deploy / register / connect answer 403 unless the owner approved exactly the
+  code stored now (an approval records the code's SHA-256; any change to the
+  code ends it). Undeploy, stop and delete work for any server.
+* Only the build run this router starts for a server may submit its code
+  (``mcp_build``): the run's server-set context names the server, and the
+  server's record names the thread (omniharness.runtime.mcp.studio).
 """
 
 from __future__ import annotations
@@ -46,14 +52,16 @@ from app.gateway.deps import (
     get_run_manager,
     get_stream_bridge,
 )
-from app.gateway.mcp_server_manager import McpDeployInProgressError, McpTeardownError
+from app.gateway.mcp_server_manager import McpApprovalRequiredError, McpDeployInProgressError, McpTeardownError
 from app.gateway.services import (
     build_run_config,
     normalize_input,
     normalize_stream_modes,
     resolve_agent_factory,
 )
+from omniharness.persistence.mcp_server.approval import deployed_code_is_current
 from omniharness.runtime import run_agent
+from omniharness.runtime.mcp.studio import STUDIO_BUILD_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +96,12 @@ class McpServerResponse(BaseModel):
     status: str
     phase: str
     approved: bool
+    # SHA-256 of the stored code, of the approved code (None: never approved),
+    # and whether the running container was built from the stored code.
+    code_sha256: str | None = None
+    approved_code_sha256: str | None = None
+    approved_at: str | None = None
+    deployed_code_current: bool = False
     detected_secrets: list[str]
     egress_hosts: list[str]
     source_code: str | None
@@ -125,6 +139,10 @@ class McpBuildStatusResponse(BaseModel):
     container_id: str | None = None
     container_port: int | None = None
     deploy_steps: list[dict[str, Any]] = []
+
+
+class McpApproveRequest(BaseModel):
+    code_sha256: str | None = Field(default=None, max_length=64, description="SHA-256 of the code the owner reviewed; refused (409) when the stored code differs.")
 
 
 class McpConnectResponse(BaseModel):
@@ -180,6 +198,10 @@ def _server_to_response(server: dict, phase: str = "idle") -> McpServerResponse:
         status=server["status"],
         phase=phase,
         approved=bool(server.get("approved", False)),
+        code_sha256=server.get("code_sha256"),
+        approved_code_sha256=server.get("approved_code_sha256"),
+        approved_at=server.get("approved_at"),
+        deployed_code_current=bool(server.get("container_id")) and deployed_code_is_current(server),
         detected_secrets=server.get("detected_secrets") or [],
         egress_hosts=server.get("egress_hosts") or [],
         source_code=source_code,
@@ -233,15 +255,17 @@ async def create_mcp_server(
     user_id = _get_user_id(request)
     repo = get_mcp_server_repo(request)
 
+    # The record names the build thread: mcp_build checks it at dispatch.
+    thread_id = uuid.uuid4().hex
     server = await repo.create(
         name=body.name,
         owner_id=user_id,
         language=body.language or "python",
         description=body.description,
         egress_hosts=body.egress_hosts,
+        build_thread_id=thread_id,
     )
     server_id = server["id"]
-    thread_id = uuid.uuid4().hex
 
     # Build the initial message that kicks off the mcp-server-builder skill
     template_hint = body.template_type or "custom_tool"
@@ -264,7 +288,12 @@ async def create_mcp_server(
         None,
         {"mcp_server_id": server_id, "mcp_server_name": body.name},
     )
-    config.setdefault("context", {})["user_id"] = user_id
+    context = config.setdefault("context", {})
+    context["user_id"] = user_id
+    # Server-owned: this is the one place a run is marked as MCP Studio's build
+    # run for this server (omniharness.runtime.mcp.studio). A run request can
+    # never carry the key (services.SERVER_OWNED_RUN_KEYS).
+    context[STUDIO_BUILD_KEY] = server_id
 
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
@@ -555,15 +584,22 @@ async def trigger_mcp_test(server_id: str, request: Request) -> McpBuildStatusRe
 
 @router.post("/servers/{server_id}/approve", response_model=McpServerResponse)
 @require_permission("threads", "write")
-async def approve_mcp_server(server_id: str, request: Request) -> McpServerResponse:
+async def approve_mcp_server(server_id: str, request: Request, body: McpApproveRequest | None = None) -> McpServerResponse:
+    """Approve the server's current code: its SHA-256, who and when are recorded.
+
+    Send ``code_sha256`` (the hash shown with the code) to approve only that
+    code: a server whose code changed since answers 409 and nothing is approved.
+    """
     _check_flag(request)
     user_id = _get_user_id(request)
     manager = get_mcp_server_manager(request)
 
     try:
-        await manager.approve(server_id=server_id, user_id=user_id)
+        await manager.approve(server_id=server_id, user_id=user_id, expected_code_sha256=body.code_sha256 if body else None)
     except PermissionError:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     repo = get_mcp_server_repo(request)
     server = await repo.get(server_id)
@@ -586,6 +622,8 @@ async def register_mcp_server(server_id: str, request: Request) -> McpServerResp
 
     try:
         record = await manager.register(server_id=server_id, user_id=user_id)
+    except McpApprovalRequiredError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=404 if "not found" in str(exc) else 403, detail=str(exc)) from exc
 
@@ -636,7 +674,9 @@ async def deploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusR
 
     Requires Docker to be installed and running on the host. Injects the stored
     secrets as container env vars (they are never logged). Returns the updated
-    build status with container_id and container_port on success.
+    build status with container_id and container_port on success. 403 unless
+    the owner approved exactly the code stored now; a deploy already running
+    is returned as it is.
     """
     _check_flag(request)
     user_id = _get_user_id(request)
@@ -644,6 +684,8 @@ async def deploy_mcp_server(server_id: str, request: Request) -> McpBuildStatusR
 
     try:
         record = await manager.deploy(server_id=server_id, user_id=user_id)
+    except McpApprovalRequiredError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -712,6 +754,8 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
 
     The config file's mtime change triggers hot-reload in the agent runtime so
     the new server's tools become available immediately without a restart.
+    403 unless the owner approved exactly the code stored now and the running
+    container was built from it.
     """
     _check_flag(request)
     user_id = _get_user_id(request)
@@ -719,6 +763,8 @@ async def connect_mcp_server(server_id: str, request: Request) -> McpConnectResp
 
     try:
         result = await manager.connect(server_id=server_id, user_id=user_id)
+    except McpApprovalRequiredError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

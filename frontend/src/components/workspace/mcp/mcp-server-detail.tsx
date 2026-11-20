@@ -135,7 +135,10 @@ type McpServerResponse = {
   description: string | null;
   status: string;
   phase: McpPhase;
+  /** True only while the owner's approval is for exactly the stored code. */
   approved: boolean;
+  /** The running container was built from the stored code. */
+  deployed_code_current?: boolean;
   detected_secrets: string[];
   egress_hosts: string[];
   source_code: string | null;
@@ -2424,8 +2427,14 @@ function DeployView({
   const deploySteps = (buildStatus?.deploy_steps ?? []) as DeployStep[];
   const hasTimeline = isDeploying || (isFailed && deploySteps.length > 0);
 
+  // Deploy needs the owner's approval of exactly this code (the server says 403
+  // otherwise). Approving from this page comes with the Studio redesign.
+  const isApproved = server.approved;
   const canDeploy =
-    allSecretsStored && (isVerified || isDeployed) && !isDeploying;
+    isApproved &&
+    allSecretsStored &&
+    (isVerified || isDeployed) &&
+    !isDeploying;
 
   const handleDeploy = async () => {
     setError(null);
@@ -2466,6 +2475,7 @@ function DeployView({
         {isFailed && (
           <Button
             className="bg-primary text-primary-foreground hover:bg-primary/90 w-full max-w-sm py-3 text-sm font-semibold"
+            disabled={!isApproved}
             onClick={() => void handleDeploy()}
           >
             Retry deploy
@@ -2600,6 +2610,7 @@ function DeployView({
           <div className="flex flex-col gap-2">
             <Button
               className="border-border bg-card text-foreground hover:bg-muted w-full border py-3 text-sm font-semibold shadow-sm"
+              disabled={!isApproved}
               onClick={() => void handleDeploy()}
             >
               Re-deploy
@@ -2623,6 +2634,12 @@ function DeployView({
           </div>
         )}
 
+        {!isApproved && (
+          <p className="text-muted-foreground text-center text-[11px]">
+            This code is not approved yet. Deploying needs the owner&apos;s
+            approval of the current code.
+          </p>
+        )}
         {!allSecretsStored && !isDeployed && (
           <p className="text-muted-foreground text-center text-[11px]">
             Add your API secrets on the Build tab to enable deploy
@@ -2673,6 +2690,13 @@ function ConnectView({
   const isDeployed = phase === "deployed";
   const containerPort = buildStatus?.container_port;
   const sseUrl = containerPort ? `http://localhost:${containerPort}/sse` : null;
+  // Connect needs the approved code to be the code running (the server says 403
+  // otherwise).
+  const connectBlocked = !server.approved
+    ? "This code is not approved yet. Connecting needs the owner's approval of the current code."
+    : server.deployed_code_current === false
+      ? "The running server was built from different code. Deploy the approved code first."
+      : null;
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -2792,7 +2816,7 @@ function ConnectView({
               ? "border-success/30 bg-success/10 text-success hover:bg-success/15 border"
               : "bg-primary text-primary-foreground hover:bg-primary/90",
           )}
-          disabled={connecting}
+          disabled={connecting || connectBlocked !== null}
           onClick={() => void handleConnect()}
         >
           {connecting ? (
@@ -2810,6 +2834,11 @@ function ConnectView({
           )}
         </Button>
 
+        {connectBlocked && (
+          <p className="text-muted-foreground text-center text-[11px]">
+            {connectBlocked}
+          </p>
+        )}
         {error && (
           <p className="text-destructive text-center text-xs">{error}</p>
         )}

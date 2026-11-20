@@ -43,11 +43,3 @@ export interface BuiltServerList {
   servers: BuiltServer[];
   total: number;
 }
-
-export interface StartBuildResponse {
-  server_id: string;
-  thread_id: string;
-  name: string;
-  /** The names a secret in the description was stored under. Never values. */
-  secret_placeholders: string[];
-}

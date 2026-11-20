@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omniharness.persistence.mcp_server.approval import code_sha256, matches_code
 from omniharness.persistence.mcp_server.model import McpServerRow
 from omniharness.persistence.timestamps import utc_iso
 from omniharness.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
@@ -28,7 +29,15 @@ class McpServerRepository:
             "description": row.description,
             "status": row.status,
             "detected_secrets": row.detected_secrets or [],
-            "approved": bool(row.approved),
+            # Derived, never stored: approved only while the approval's hash is
+            # the hash of the code stored now.
+            "approved": matches_code(row.approved_code_sha256, row.source_code),
+            "code_sha256": code_sha256(row.source_code),
+            "approved_code_sha256": row.approved_code_sha256,
+            "approved_by": row.approved_by,
+            "approved_at": row.approved_at,
+            "deployed_code_sha256": row.deployed_code_sha256,
+            "build_thread_id": row.build_thread_id,
             "egress_hosts": row.egress_hosts or [],
             "source_code": row.source_code,
             "tools_discovered": row.tools_discovered or [],
@@ -93,6 +102,7 @@ class McpServerRepository:
         description: str | None = None,
         egress_hosts: list[str] | None = None,
         source_code: str | None = None,
+        build_thread_id: str | None = None,
     ) -> dict[str, Any]:
         """Insert a new MCP server record owned by *owner_id*."""
         row = McpServerRow(
@@ -106,6 +116,7 @@ class McpServerRepository:
             approved=False,
             egress_hosts=egress_hosts or [],
             source_code=source_code,
+            build_thread_id=build_thread_id,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -131,11 +142,20 @@ class McpServerRepository:
         return True
 
     async def update_source_code(self, server_id: str, source_code: str, *, user_id: str) -> bool:
-        """Persist the agent-generated source code for a server the caller owns."""
+        """Persist the agent-generated source code for a server the caller owns.
+
+        Different code ends the approval in the same write: an approval is for
+        one exact source. (It would read as unapproved anyway: ``approved`` is
+        derived from the hashes.)"""
         async with self._sf() as session:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
+            if code_sha256(source_code) != code_sha256(row.source_code):
+                row.approved = False
+                row.approved_code_sha256 = None
+                row.approved_by = None
+                row.approved_at = None
             row.source_code = source_code
             row.updated_at = datetime.now(UTC)
             await session.commit()
@@ -175,18 +195,27 @@ class McpServerRepository:
             await session.commit()
         return True
 
-    async def set_approved(self, server_id: str, approved: bool, *, user_id: str) -> bool:
-        """Set the approval flag for a server the caller owns.
+    async def record_approval(self, server_id: str, *, code_sha256_approved: str, approved_by: str, user_id: str) -> bool:
+        """Record an approval of the code whose hash is ``code_sha256_approved``.
 
-        Returns True if updated, False if not found / not owner.
+        Written only when that hash is the hash of the code stored now, read
+        and written in one session, so code changed meanwhile is never
+        approved. Returns False when not found, not the owner's, or the code
+        differs. Approving the same code again keeps the first record.
         """
         async with self._sf() as session:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
-            row.approved = approved
-            row.updated_at = datetime.now(UTC)
-            await session.commit()
+            if not matches_code(code_sha256_approved, row.source_code):
+                return False
+            if row.approved_code_sha256 != code_sha256_approved:
+                row.approved_code_sha256 = code_sha256_approved
+                row.approved_by = approved_by
+                row.approved_at = datetime.now(UTC).isoformat()
+                row.approved = True
+                row.updated_at = datetime.now(UTC)
+                await session.commit()
         return True
 
     async def update_container_info(
@@ -197,14 +226,17 @@ class McpServerRepository:
         container_port: int | None,
         status: str,
         user_id: str,
+        deployed_code_sha256: str | None = None,
     ) -> bool:
-        """Persist Docker container ID + host port after deployment."""
+        """Persist Docker container ID + host port after deployment, with the
+        hash of the code the container was built from (cleared with it)."""
         async with self._sf() as session:
             row = await session.get(McpServerRow, server_id)
             if row is None or row.owner_id != user_id:
                 return False
             row.container_id = container_id
             row.container_port = container_port
+            row.deployed_code_sha256 = deployed_code_sha256 if container_id else None
             row.status = status
             row.updated_at = datetime.now(UTC)
             await session.commit()

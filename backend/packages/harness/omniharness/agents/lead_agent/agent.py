@@ -431,6 +431,7 @@ def _resolve_lead_inputs(cfg: dict, *, app_config: AppConfig) -> _LeadInputs:
             return {skill.name for skill in get_enabled_skills_for_config(app_config)}
 
         available_skills = _effective_skill_names(available_skills, cfg.get("excluded_skills"), enabled_skill_names=_enabled_skill_names)
+        available_skills = _studio_skill_names(available_skills, cfg)
     requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
@@ -446,6 +447,40 @@ def _resolve_lead_inputs(cfg: dict, *, app_config: AppConfig) -> _LeadInputs:
     )
 
 
+def _studio_skill_names(available_skills: set[str] | None, cfg: dict) -> set[str] | None:
+    """MCP Studio-only skills (the MCP server builder): listed to a Studio
+    build run, which gets only those, and to no other run."""
+    from omniharness.runtime.mcp.studio import STUDIO_ONLY_SKILLS, studio_build_server_id, without_studio_only_skills
+
+    if studio_build_server_id(cfg) is not None:
+        return set(STUDIO_ONLY_SKILLS)
+    if available_skills is None:
+        # Every enabled skill: the prompt's skill list leaves the Studio-only
+        # ones out (prompt.get_skills_prompt_section), as a delegate does.
+        return None
+    return without_studio_only_skills(available_skills)
+
+
+def _studio_build_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfig, server_id: str, skills_for_tool_policy: list) -> list[BaseTool]:
+    """An MCP Studio build run's tools: reading, the web, and mcp_build for
+    its own server. No delegation, no connectors or MCP servers, no builder,
+    ledger, artifact, preview or coding-job tools."""
+    from omniharness.runtime.mcp.studio import STUDIO_BUILD_EXCLUDED_TOOLS, STUDIO_BUILD_TOOL_GROUPS
+    from omniharness.tools import get_available_tools
+
+    tools = get_available_tools(
+        model_name=inputs.model_name,
+        groups=list(STUDIO_BUILD_TOOL_GROUPS),
+        include_mcp=False,
+        subagent_enabled=False,
+        app_config=app_config,
+        user_id=cfg.get("user_id"),
+        mcp_build_server_id=server_id,
+    )
+    tools = [t for t in tools if t.name not in STUDIO_BUILD_EXCLUDED_TOOLS]
+    return filter_tools_by_skill_allowed_tools(tools, skills_for_tool_policy, always_include={"mcp_build"})
+
+
 def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfig) -> list[BaseTool]:
     """THE lead agent's tool list. One function, two callers.
 
@@ -459,6 +494,12 @@ def _assemble_lead_tools(cfg: dict, inputs: _LeadInputs, *, app_config: AppConfi
     from omniharness.tools.tools import resolve_model_tool_cap
 
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(inputs.available_skills, app_config=app_config)
+
+    from omniharness.runtime.mcp.studio import studio_build_server_id
+
+    studio_server_id = studio_build_server_id(cfg)
+    if studio_server_id is not None:
+        return _studio_build_tools(cfg, inputs, app_config=app_config, server_id=studio_server_id, skills_for_tool_policy=skills_for_tool_policy)
 
     # MCP tools are dynamically registered and unknown at skill authoring
     # time, so they must never be dropped by skill allowed-tools policies.
@@ -527,9 +568,10 @@ def builder_tools_for(cfg: dict) -> list[BaseTool]:
     GET /api/builder/status for why."""
     from omniharness.runtime.builder.controller import get_builder_controller
     from omniharness.runtime.builder.surface import builder_refusal
+    from omniharness.runtime.mcp.studio import studio_build_server_id
 
     controller = get_builder_controller()
-    if controller is None:
+    if controller is None or studio_build_server_id(cfg) is not None:
         return []
     if builder_refusal(cfg) is not None:
         return _builder_question_resume_tools(cfg) if _builder_ready(controller) else []
@@ -678,6 +720,13 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             connectors_off=cfg.get("connectors_off"),
             memory_off=cfg.get("memory_off") is True,
             builder=bool(builder_tools_for(cfg)),
+            studio_build=_studio_build_server(cfg) is not None,
         ),
         state_schema=ThreadState,
     )
+
+
+def _studio_build_server(cfg: dict) -> str | None:
+    from omniharness.runtime.mcp.studio import studio_build_server_id
+
+    return studio_build_server_id(cfg)

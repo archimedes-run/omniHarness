@@ -36,7 +36,10 @@ LEAD = "lead"
 SUBAGENT = "subagent"
 
 #: The runtime-config keys `_make_lead_agent` assembles its tools from.
-LEAD_KEYS = ("model_name", "model", "agent_name", "subagent_enabled", "is_bootstrap", "selected_sources", "user_id", "excluded_skills")
+#: "mcp_studio_server_id" (omniharness.runtime.mcp.studio.STUDIO_BUILD_KEY):
+#: an MCP Studio build run's server, so a confirmed mcp_build call is run on
+#: that run's own tools; a resumed run never carries it (app.gateway.resume).
+LEAD_KEYS = ("model_name", "model", "agent_name", "subagent_enabled", "is_bootstrap", "selected_sources", "user_id", "excluded_skills", "mcp_studio_server_id")
 
 
 def _jsonable(value: Any) -> Any:

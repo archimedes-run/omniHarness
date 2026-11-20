@@ -47,6 +47,15 @@ async def _make_manager():
     return manager, repo, vault, engine
 
 
+async def _approved_row(repo, source: str = "print('ok')\n") -> dict:
+    """A server whose current code the owner approved (the record, as approve writes it)."""
+    from omniharness.persistence.mcp_server.approval import code_sha256
+
+    row = await repo.create(name="srv", owner_id="user_a", source_code=source)
+    assert await repo.record_approval(row["id"], code_sha256_approved=code_sha256(source), approved_by="user_a", user_id="user_a")
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Ownership check — every mutating method calls _load_and_verify first
 # ---------------------------------------------------------------------------
@@ -73,8 +82,7 @@ async def test_test_server_raises_for_wrong_owner() -> None:
 @pytest.mark.anyio
 async def test_register_raises_for_wrong_owner() -> None:
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    await repo.set_approved(row["id"], True, user_id="user_a")
+    row = await _approved_row(repo)
     with pytest.raises(PermissionError):
         await manager.register(server_id=row["id"], user_id="user_b")
     await engine.dispose()
@@ -98,7 +106,9 @@ async def test_stop_raises_for_wrong_owner() -> None:
 async def test_unapproved_server_cannot_register() -> None:
     manager, repo, _, engine = await _make_manager()
     row = await repo.create(name="srv", owner_id="user_a")
-    with pytest.raises(PermissionError, match="not been approved"):
+    from app.gateway.mcp_server_manager import McpApprovalRequiredError
+
+    with pytest.raises(McpApprovalRequiredError, match="not been approved"):
         await manager.register(server_id=row["id"], user_id="user_a")
     await engine.dispose()
 
@@ -106,8 +116,7 @@ async def test_unapproved_server_cannot_register() -> None:
 @pytest.mark.anyio
 async def test_approved_server_can_register() -> None:
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
-    await repo.set_approved(row["id"], True, user_id="user_a")
+    row = await _approved_row(repo)
     record = await manager.register(server_id=row["id"], user_id="user_a")
     assert record.phase == "ready"
     await engine.dispose()
@@ -347,17 +356,21 @@ async def test_approve_blocked_when_phase_is_testing() -> None:
 async def test_approve_succeeds_when_phase_is_verified() -> None:
     """approve() succeeds and transitions to idle when phase is 'verified'."""
     from app.gateway.mcp_server_manager import MCPBuildRecord
+    from omniharness.persistence.mcp_server.approval import code_sha256
 
     manager, repo, _, engine = await _make_manager()
-    row = await repo.create(name="srv", owner_id="user_a")
+    row = await repo.create(name="srv", owner_id="user_a", source_code="print('v1')\n")
     manager._records[row["id"]] = MCPBuildRecord(server_id=row["id"], phase="verified", owner_id="user_a")
     result = await manager.approve(server_id=row["id"], user_id="user_a")
     assert result.phase == "idle"
 
-    # Verify the DB flag was set
+    # The approval record: the hash of the exact code, who, when.
     server = await repo.get(row["id"], user_id="user_a")
     assert server is not None
     assert server["approved"] is True
+    assert server["approved_code_sha256"] == code_sha256("print('v1')\n")
+    assert server["approved_by"] == "user_a"
+    assert server["approved_at"]
     await engine.dispose()
 
 

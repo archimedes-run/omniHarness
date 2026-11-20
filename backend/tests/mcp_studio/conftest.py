@@ -57,17 +57,26 @@ class Studio(SimpleNamespace):
         """Run an async app-side call on the app's own event loop."""
         return self.client.portal.call(functools.partial(fn, *args, **kwargs))
 
-    def make_server(self, name: str = "GitHub Issue Connector", *, deployed: bool = True) -> str:
+    def make_server(self, name: str = "GitHub Issue Connector", *, deployed: bool = True, approved: bool | None = None, source: str = "print('x')\n") -> str:
+        """A server row. ``approved`` (default: as ``deployed``) writes the
+        owner's approval of its code, as POST .../approve does; ``deployed``
+        a container built from that code, as a finished deploy does."""
+        from omniharness.persistence.mcp_server.approval import code_sha256
+
         app = self.client.app
-        row = self.run(app.state.mcp_server_repo.create, name=name, owner_id=self.owner_id, source_code="print('x')\n")
+        repo = app.state.mcp_server_repo
+        row = self.run(repo.create, name=name, owner_id=self.owner_id, source_code=source)
+        if deployed if approved is None else approved:
+            assert self.run(repo.record_approval, row["id"], code_sha256_approved=code_sha256(source), approved_by=self.owner_id, user_id=self.owner_id)
         if deployed:
             self.run(
-                app.state.mcp_server_repo.update_container_info,
+                repo.update_container_info,
                 row["id"],
                 container_id="c0ffee",
                 container_port=18123,
                 status="deployed",
                 user_id=self.owner_id,
+                deployed_code_sha256=code_sha256(source),
             )
         return row["id"]
 

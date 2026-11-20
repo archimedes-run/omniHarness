@@ -56,6 +56,11 @@ class MCPBuildController(Protocol):
         """Stop a running server."""
         ...
 
+    async def studio_build_allowed(self, *, server_id: str, thread_id: str, user_id: str) -> bool:
+        """True only when *server_id* is owned by *user_id* and its record names
+        *thread_id* as the build thread MCP Studio opened for it."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton (mirrors omniharness.preview.preview_controller)

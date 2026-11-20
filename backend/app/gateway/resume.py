@@ -135,7 +135,7 @@ def _body_from_surface(surface: dict) -> Any:
     from omniharness.agents.tool_surface import LEAD_KEYS
 
     config = dict((surface or {}).get("config") or {})
-    context = {k: config[k] for k in LEAD_KEYS if k in config and k not in ("selected_sources", "user_id", "excluded_skills", "model")}
+    context = {k: config[k] for k in LEAD_KEYS if k in config and k not in ("selected_sources", "user_id", "excluded_skills", "model", "mcp_studio_server_id")}
     return RunCreateRequest(
         assistant_id="lead_agent",
         input=None,
